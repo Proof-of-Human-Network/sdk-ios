@@ -1,4 +1,4 @@
-# POHKit
+# proofofhuman
 
 Swift Package Manager SDK for [Proof of Human](https://proofofhuman.ge).  
 Supports **iOS 15+**, **macOS 12+**, **tvOS 15+**, **watchOS 8+**.  
@@ -12,17 +12,17 @@ Or in `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/your-org/pohkit-swift", from: "0.1.0"),
+    .package(url: "https://github.com/Proof-of-Human-Network/sdk-ios", from: "0.1.0"),
 ],
 targets: [
-    .target(name: "MyApp", dependencies: ["POHKit"]),
+    .target(name: "MyApp", dependencies: ["proofofhuman"]),
 ]
 ```
 
 ## Quick start
 
 ```swift
-import POHKit
+import proofofhuman
 
 let poh = POHClient(
     baseURL: URL(string: "https://api.proofofhuman.com")!,

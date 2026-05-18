@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "POHKit",
+    name: "proofofhuman",
     platforms: [
         .iOS(.v15),
         .macOS(.v12),
@@ -10,17 +10,17 @@ let package = Package(
         .watchOS(.v8),
     ],
     products: [
-        .library(name: "POHKit", targets: ["POHKit"]),
+        .library(name: "proofofhuman", targets: ["proofofhuman"]),
     ],
     targets: [
         .target(
-            name: "POHKit",
-            path: "Sources/POHKit"
+            name: "proofofhuman",
+            path: "Sources/proofofhuman"
         ),
         .testTarget(
-            name: "POHKitTests",
-            dependencies: ["POHKit"],
-            path: "Tests/POHKitTests"
+            name: "proofofhumanTests",
+            dependencies: ["proofofhuman"],
+            path: "Tests/proofofhumanTests"
         ),
     ]
 )

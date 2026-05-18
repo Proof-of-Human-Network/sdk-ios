@@ -1,5 +1,5 @@
 import XCTest
-@testable import POHKit
+@testable import proofofhuman
 
 final class POHClientTests: XCTestCase {
 
