@@ -1,0 +1,9 @@
+.build/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+*.resolved
+Pods/
+.env
+.DS_Store
