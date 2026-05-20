@@ -15,6 +15,25 @@ public struct ScanOptions {
     }
 }
 
+/// Options for brain verdict polling.
+public struct BrainPollOptions {
+    /// Seconds between brain verdict checks. Default: 1.5
+    public var interval: TimeInterval
+    /// Maximum total wait in seconds before throwing. Default: 30
+    public var timeout: TimeInterval
+
+    public init(interval: TimeInterval = 1.5, timeout: TimeInterval = 30) {
+        self.interval = interval
+        self.timeout  = timeout
+    }
+}
+
+/// Combined result of ``POHClient/scanAndVerdict(_:scanOptions:brainOptions:)``.
+public struct ScanWithVerdict {
+    public let scan:    ScanResult
+    public let verdict: BrainVerdict
+}
+
 /// Options for job polling and the watch stream.
 public struct PollOptions {
     /// Seconds between status checks. Default: 1.5
@@ -92,7 +111,8 @@ public struct JobStatus: Decodable {
 /// AI brain verdict returned after scan evaluation finishes.
 public struct BrainVerdict: Decodable {
     public let status: String
-    public let verdict: Bool?
+    /// `"HUMAN"` | `"AI"` | `"UNCERTAIN"` — `nil` while pending.
+    public let verdict: String?
     public let confidence: Double?
     public let signals: [String: Double]?
     public let reasoning: String?

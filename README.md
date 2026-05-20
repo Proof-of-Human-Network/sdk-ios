@@ -25,7 +25,7 @@ targets: [
 import proofofhuman
 
 let poh = POHClient(
-    baseURL: URL(string: "https://api.proofofhuman.com")!,
+    baseURL: URL(string: "https://proofofhuman.ge")!,
     apiKey:  "your-api-key"   // or use walletAddress: for free tier
 )
 

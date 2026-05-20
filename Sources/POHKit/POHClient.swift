@@ -3,7 +3,7 @@ import Foundation
 /// Client for the Proof of Human API.
 ///
 /// ```swift
-/// let poh = POHClient(baseURL: URL(string: "https://api.proofofhuman.com")!)
+/// let poh = POHClient(baseURL: URL(string: "https://proofofhuman.ge")!)
 ///
 /// // Single scan
 /// let result = try await poh.scan("0xabc...")
@@ -191,6 +191,57 @@ public final class POHClient {
     /// `brainKey` is returned by ``scan(_:options:)`` once evaluation finishes.
     public func getBrainVerdict(brainKey: String) async throws -> BrainVerdict {
         return try await request("GET", path: "/checker/brain/\(encoded(brainKey))")
+    }
+
+    /// Poll the brain verdict until ``BrainVerdict/status`` leaves `"pending"`.
+    ///
+    /// Throws ``POHError/jobTimedOut(jobId:lastStatus:)`` if the verdict does not
+    /// resolve within `options.timeout` seconds.
+    ///
+    /// ```swift
+    /// let verdict = try await poh.pollBrainVerdict(brainKey: scan.brainKey!)
+    /// print(verdict.verdict, verdict.confidence)
+    /// ```
+    public func pollBrainVerdict(
+        brainKey: String,
+        options: BrainPollOptions = .init()
+    ) async throws -> BrainVerdict {
+        let deadline = Date().addingTimeInterval(options.timeout)
+
+        while true {
+            let v = try await getBrainVerdict(brainKey: brainKey)
+            if v.status != "pending" { return v }
+            let nextPoll = Date().addingTimeInterval(options.interval)
+            if nextPoll > deadline {
+                throw POHError.jobTimedOut(jobId: brainKey, lastStatus: v.status)
+            }
+            try await Task.sleep(nanoseconds: UInt64(options.interval * 1_000_000_000))
+        }
+    }
+
+    /// Convenience: scan a single address and wait for the AI brain verdict.
+    ///
+    /// Returns a ``ScanWithVerdict`` containing both the raw scan evidence and the
+    /// resolved verdict.
+    ///
+    /// ```swift
+    /// let sv = try await poh.scanAndVerdict("0xabc...")
+    /// print(sv.verdict.verdict, sv.verdict.confidence)
+    /// ```
+    public func scanAndVerdict(
+        _ input: String,
+        scanOptions:  ScanOptions     = .init(),
+        brainOptions: BrainPollOptions = .init()
+    ) async throws -> ScanWithVerdict {
+        let scan = try await self.scan(input, options: scanOptions)
+        guard let key = scan.brainKey else {
+            return ScanWithVerdict(
+                scan:    scan,
+                verdict: BrainVerdict(status: "not_found", verdict: nil, confidence: nil, signals: nil, reasoning: nil)
+            )
+        }
+        let verdict = try await pollBrainVerdict(brainKey: key, options: brainOptions)
+        return ScanWithVerdict(scan: scan, verdict: verdict)
     }
 
     // ── Methods ────────────────────────────────────────────────────────────────
