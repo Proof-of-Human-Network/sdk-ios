@@ -1,25 +1,28 @@
 import Foundation
 
+/// Default public bootstrap nodes for the PoH network.
+public let pohDefaultNodes: [URL] = [
+    URL(string: "https://bootnode.proofofhuman.ge")!,
+    URL(string: "https://proofofhuman.ge")!,
+    URL(string: "https://poh.assetux.com")!,
+]
+
 /// Client for the Proof of Human API.
 ///
 /// ```swift
+/// // Legacy single-node:
 /// let poh = POHClient(baseURL: URL(string: "https://proofofhuman.ge")!)
+///
+/// // Network mode — auto-picks fastest live node:
+/// let poh = POHClient(nodes: pohDefaultNodes)
+/// try await poh.connect()   // probe nodes; optional but removes latency from first call
 ///
 /// // Single scan
 /// let result = try await poh.scan("0xabc...")
-///
-/// // Bulk scan + poll
-/// let job   = try await poh.scanBulk(["0xaaa...", "0xbbb..."])
-/// let final = try await poh.pollJob(job.jobId)
-///
-/// // Stream progress
-/// for try await snap in poh.watchJob(job.jobId) {
-///     print("\(snap.percent)% complete")
-/// }
 /// ```
 public final class POHClient {
 
-    private let baseURL: URL
+    private let candidateURLs: [URL]
     private let apiKey:        String?
     private let walletAddress: String?
     private let timeout:       TimeInterval
@@ -27,14 +30,12 @@ public final class POHClient {
     private let encoder:       JSONEncoder
     private let decoder:       JSONDecoder
 
+    /// The node URL currently in use. Set after ``connect()`` or first request.
+    public private(set) var activeNode: URL?
+
     // ── Init ───────────────────────────────────────────────────────────────────
 
-    /// Create a new POHClient.
-    /// - Parameters:
-    ///   - baseURL: Base URL of the POH API (no trailing slash needed).
-    ///   - apiKey: API key for the paid tier.
-    ///   - walletAddress: Solana wallet address for free-tier request tracking.
-    ///   - timeout: Per-request timeout in seconds. Default: 30.
+    /// Create a client that targets a single node (legacy / backwards-compatible).
     public convenience init(
         baseURL:       URL,
         apiKey:        String? = nil,
@@ -42,7 +43,24 @@ public final class POHClient {
         timeout:       TimeInterval = 30
     ) {
         self.init(
-            baseURL:       baseURL,
+            nodes:         [baseURL],
+            apiKey:        apiKey,
+            walletAddress: walletAddress,
+            timeout:       timeout,
+            session:       URLSession.shared
+        )
+    }
+
+    /// Create a client that probes multiple network nodes and uses the fastest.
+    /// Falls back to ``pohDefaultNodes`` when *nodes* is empty.
+    public convenience init(
+        nodes:         [URL]         = pohDefaultNodes,
+        apiKey:        String?       = nil,
+        walletAddress: String?       = nil,
+        timeout:       TimeInterval  = 30
+    ) {
+        self.init(
+            nodes:         nodes.isEmpty ? pohDefaultNodes : nodes,
             apiKey:        apiKey,
             walletAddress: walletAddress,
             timeout:       timeout,
@@ -51,22 +69,67 @@ public final class POHClient {
     }
 
     init(
-        baseURL:       URL,
-        apiKey:        String? = nil,
-        walletAddress: String? = nil,
+        nodes:         [URL],
+        apiKey:        String?      = nil,
+        walletAddress: String?      = nil,
         timeout:       TimeInterval = 30,
         session:       HTTPSession
     ) {
-        var url = baseURL.absoluteString
-        if url.hasSuffix("/") { url.removeLast() }
-        self.baseURL       = URL(string: url)!
+        let cleaned = nodes.map { url -> URL in
+            var s = url.absoluteString
+            if s.hasSuffix("/") { s.removeLast() }
+            return URL(string: s)!
+        }
+        self.candidateURLs = cleaned
+        self.activeNode    = cleaned.count == 1 ? cleaned[0] : nil
         self.apiKey        = apiKey
         self.walletAddress = walletAddress
         self.timeout       = timeout
         self.session       = session
-
         encoder = JSONEncoder()
         decoder = JSONDecoder()
+    }
+
+    // ── Node discovery ─────────────────────────────────────────────────────────
+
+    /// Probe all candidate nodes in parallel; resolve ``activeNode`` to the fastest one.
+    /// Safe to call multiple times; resolves immediately after the first successful probe.
+    ///
+    /// Call this once at app start to avoid adding latency to the first scan request.
+    public func connect() async {
+        guard candidateURLs.count > 1, activeNode == nil else { return }
+        await withTaskGroup(of: URL?.self) { group in
+            for url in candidateURLs {
+                group.addTask { await self.probeNode(url) }
+            }
+            for await result in group {
+                if let url = result, self.activeNode == nil {
+                    self.activeNode = url
+                    group.cancelAll()
+                    return
+                }
+            }
+        }
+        if activeNode == nil { activeNode = candidateURLs[0] }
+    }
+
+    private func probeNode(_ url: URL) async -> URL? {
+        var req = URLRequest(
+            url:              URL(string: url.absoluteString + "/healthz")!,
+            timeoutInterval:  4
+        )
+        req.httpMethod = "HEAD"
+        guard let (_, resp) = try? await session.data(for: req),
+              let http = resp as? HTTPURLResponse,
+              http.statusCode < 500
+        else { return nil }
+        return url
+    }
+
+    private func resolvedBase() async -> URL {
+        if let node = activeNode { return node }
+        await connect()
+        return activeNode ?? candidateURLs[0]
     }
 
     // ── Scan ───────────────────────────────────────────────────────────────────
@@ -266,7 +329,8 @@ public final class POHClient {
         path: String,
         body: (some Encodable)? = nil as String?
     ) async throws -> T {
-        guard let url = URL(string: baseURL.absoluteString + path) else {
+        let base = await resolvedBase()
+        guard let url = URL(string: base.absoluteString + path) else {
             throw POHError.invalidBaseURL
         }
 

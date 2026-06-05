@@ -56,6 +56,16 @@ public struct PollOptions {
 
 // ── Scan results ───────────────────────────────────────────────────────────────
 
+/// Present in ``ScanResult/ofac`` when the address is on the OFAC SDN list.
+public struct OfacMatch: Decodable {
+    public let name:           String
+    public let program:        String
+    public let chainCode:      String
+    /// `"direct"` = scanned address itself; `"counterparty"` = 1-hop tx partner.
+    public let type:           String
+    public let matchedAddress: String
+}
+
 /// Result of a single synchronous scan.
 public struct ScanResult: Decodable {
     /// `true` = human, `false` = not human, `nil` = inconclusive.
@@ -65,6 +75,8 @@ public struct ScanResult: Decodable {
     public let freeScansLeft: Int?
     public let source: String?
     public let count: Int?
+    /// Set when the address (or a direct counterparty) is on the OFAC SDN list.
+    public let ofac: OfacMatch?
 }
 
 /// Reference returned immediately after submitting a bulk scan.
