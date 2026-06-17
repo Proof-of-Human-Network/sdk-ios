@@ -10,17 +10,17 @@ let package = Package(
         .watchOS(.v8),
     ],
     products: [
-        .library(name: "proofofhuman", targets: ["proofofhuman"]),
+        .library(name: "POHKit", targets: ["POHKit"]),
     ],
     targets: [
         .target(
-            name: "proofofhuman",
-            path: "Sources/proofofhuman"
+            name: "POHKit",
+            path: "Sources/POHKit"
         ),
         .testTarget(
-            name: "proofofhumanTests",
-            dependencies: ["proofofhuman"],
-            path: "Tests/proofofhumanTests"
+            name: "POHKitTests",
+            dependencies: ["POHKit"],
+            path: "Tests/POHKitTests"
         ),
     ]
 )

@@ -322,6 +322,181 @@ public final class POHClient {
         return try await request("GET", path: "/verifyer/\(encoded(methodId))")
     }
 
+    // ── Natural language jobs ─────────────────────────────────────────────────
+
+    /// Submit a natural language question to the PoH network.
+    /// Automatically routes the question to the best available skill.
+    ///
+    /// Returns immediately with an ``AskJobRef``; use ``pollJobResult(_:options:)``
+    /// or ``askAndWait(_:askOptions:pollOptions:)`` to wait for the answer.
+    ///
+    /// - Throws: ``POHError/httpError(statusCode:message:)`` with status 422 if no skill matches.
+    public func submitJob(_ question: String, options: AskOptions = .init()) async throws -> AskJobRef {
+        let maxBudget = Int64(options.budget * 1_000_000_000)
+
+        // 1. Route the question to a skill
+        let routeBody: [String: Any] = ["message": question, "budget": maxBudget]
+        let route: ChatRouteResponse = try await requestAny("POST", path: "/chat/route", anyBody: routeBody)
+        guard route.type == "skill", let skillId = route.skillId else {
+            throw POHError.httpError(statusCode: 422, message: "No skill available for: \"\(question)\"")
+        }
+
+        // 2. Submit the job
+        var jobBody: [String: Any] = [
+            "type": "skill",
+            "skillId": skillId,
+            "payload": encodeJSONValue(route.input) ?? [:],
+            "maxBudget": maxBudget,
+        ]
+        if let addr = options.walletAddress { jobBody["requesterAddress"] = addr }
+        return try await requestAny("POST", path: "/job", anyBody: jobBody)
+    }
+
+    /// Fetch the current status of a job (without fetching the full result).
+    public func getJobStatus(_ jobId: String) async throws -> AskJobStatus {
+        return try await request("GET", path: "/job/\(encoded(jobId))/status")
+    }
+
+    /// Fetch the result of a completed job.
+    /// Returns a result with `status = "computing"` if the job is not done yet.
+    public func getJobResult(_ jobId: String) async throws -> AskJobResult {
+        let raw: JobResultEnvelope = try await request("GET", path: "/job/\(encoded(jobId))/result")
+        return AskJobResult(
+            jobId:      raw.jobId,
+            status:     raw.status ?? "computing",
+            output:     raw.profile?.skillOutput,
+            nlResponse: raw.profile?.nlResponse,
+            skillId:    raw.profile?.skillId,
+            tokensUsed: raw.profile?.tokensUsed,
+            error:      raw.error
+        )
+    }
+
+    /// Poll a job until it reaches a terminal state (`done` or `error`).
+    ///
+    /// ```swift
+    /// let result = try await poh.pollJobResult(ref.jobId)
+    /// print(result.output)
+    /// ```
+    public func pollJobResult(
+        _ jobId: String,
+        options: BrainPollOptions = .init()
+    ) async throws -> AskJobResult {
+        let deadline = Date().addingTimeInterval(options.timeout)
+        while true {
+            let status = try await getJobStatus(jobId)
+            if status.status == "done" || status.status == "error" {
+                return try await getJobResult(jobId)
+            }
+            let nextPoll = Date().addingTimeInterval(options.interval)
+            if nextPoll > deadline {
+                throw POHError.jobTimedOut(jobId: jobId, lastStatus: status.status)
+            }
+            try await Task.sleep(nanoseconds: UInt64(options.interval * 1_000_000_000))
+        }
+    }
+
+    /// Convenience: submit a question and wait for the answer in one call.
+    ///
+    /// ```swift
+    /// let result = try await poh.askAndWait(
+    ///     "What does vitalik.eth write about on Paragraph?",
+    ///     askOptions: .init(budget: 0.5, walletAddress: "poh...")
+    /// )
+    /// ```
+    public func askAndWait(
+        _ question: String,
+        askOptions:  AskOptions       = .init(),
+        pollOptions: BrainPollOptions = .init()
+    ) async throws -> AskJobResult {
+        let ref = try await submitJob(question, options: askOptions)
+        return try await pollJobResult(ref.jobId, options: pollOptions)
+    }
+
+    // ── Node info ──────────────────────────────────────────────────────────────
+
+    /// Fetch metadata about the currently connected node.
+    /// Returns node ID, version, wallet address, reputation, and peer count.
+    public func getNodeInfo() async throws -> NodeInfo {
+        return try await request("GET", path: "/healthz")
+    }
+
+    /// List all skills available on the connected node.
+    public func listSkills() async throws -> [Skill] {
+        return try await request("GET", path: "/api/skills")
+    }
+
+    // ── Wallet / blockchain ──────────────────────────────────────────────────────
+
+    /// Fetch the POH balance for *address*.
+    /// The balance is in μPOH (1 POH = 1 000 000 000 μPOH).
+    public func getBalance(_ address: String) async throws -> WalletBalance {
+        return try await request("GET", path: "/api/wallet/balance?address=\(encoded(address))")
+    }
+
+    /// Fetch the current nonce for *address*.
+    /// Increment by 1 when building a new transaction.
+    public func getNonce(_ address: String) async throws -> AccountNonce {
+        return try await request("GET", path: "/api/wallet/nonce?address=\(encoded(address))")
+    }
+
+    /// Fetch the transaction history for *address*.
+    public func getTransactionHistory(_ address: String, limit: Int = 30) async throws -> TxHistoryResult {
+        return try await request("GET", path: "/api/wallet/history?address=\(encoded(address))&limit=\(limit)")
+    }
+
+    /// Fetch all pending transactions in the mempool.
+    public func getPendingTransactions() async throws -> PendingTxResult {
+        return try await request("GET", path: "/api/tx/pending")
+    }
+
+    /// Submit a pre-signed ``PohTx`` to the network.
+    public func submitTransaction(_ tx: PohTx) async throws -> TxSubmitResult {
+        return try await request("POST", path: "/api/tx/submit", body: tx)
+    }
+
+    /// Register a signing public key for *address* on the node.
+    ///
+    /// - Parameters:
+    ///   - address:      The wallet address to register the key for.
+    ///   - publicKeyPem: SPKI PEM public key from ``POHSigning/generateKeyPair()``.
+    ///   - proof:        Signature of *address* — from ``POHSigning/createSigningProof(_:privateKeyPem:)``.
+    @discardableResult
+    public func registerSigningKey(_ address: String, publicKeyPem: String, proof: String) async throws -> [String: JSONValue] {
+        let body = RegisterKeyBody(address: address, signingPublicKey: publicKeyPem, proof: proof)
+        return try await request("POST", path: "/api/wallet/register-key", body: body)
+    }
+
+    /// Fetch detailed information about the connected miner node.
+    public func getMinerInfo() async throws -> MinerInfo {
+        return try await request("GET", path: "/api/miner/info")
+    }
+
+    /// Convenience: build, sign, and submit a POH transfer in one call.
+    ///
+    /// ```swift
+    /// let kp     = POHSigning.generateKeyPair()
+    /// let result = try await poh.transfer(
+    ///     from:      myAddress,
+    ///     to:        recipientAddress,
+    ///     amountPOH: 5.0,
+    ///     keyPair:   kp
+    /// )
+    /// ```
+    public func transfer(
+        from: String,
+        to: String,
+        amountPOH: Double,
+        keyPair: POHKeyPair,
+        fee: Int64 = 0,
+        memo: String = ""
+    ) async throws -> TxSubmitResult {
+        let nonceResp = try await getNonce(from)
+        let tx        = POHSigning.buildTransfer(from: from, to: to, amountPOH: amountPOH, nonce: nonceResp.nonce + 1, fee: fee, memo: memo)
+        let signed    = try POHSigning.signTransaction(tx, keyPair: keyPair)
+        return try await submitTransaction(signed)
+    }
+
     // ── Internal ───────────────────────────────────────────────────────────────
 
     private func request<T: Decodable>(
@@ -373,4 +548,89 @@ public final class POHClient {
     private func encoded(_ s: String) -> String {
         s.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? s
     }
+
+    // Encode a JSONValue back to a plain Any for use in request bodies
+    private func encodeJSONValue(_ value: JSONValue?) -> Any? {
+        guard let value = value else { return nil }
+        switch value {
+        case .null:         return NSNull()
+        case .bool(let v):  return v
+        case .int(let v):   return v
+        case .double(let v):return v
+        case .string(let v):return v
+        case .array(let a): return a.map { encodeJSONValue($0) as Any }
+        case .object(let o):return o.mapValues { encodeJSONValue($0) as Any }
+        }
+    }
+
+    // Request with Any-typed body (serialized via JSONSerialization, not Codable)
+    private func requestAny<T: Decodable>(
+        _ method: String,
+        path: String,
+        anyBody: [String: Any]
+    ) async throws -> T {
+        let data = try JSONSerialization.data(withJSONObject: anyBody)
+        let base = await resolvedBase()
+        guard let url = URL(string: base.absoluteString + path) else {
+            throw POHError.invalidBaseURL
+        }
+        var req = URLRequest(url: url, timeoutInterval: timeout)
+        req.httpMethod = method
+        req.httpBody = data
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let apiKey { req.setValue(apiKey, forHTTPHeaderField: "x-api-key") }
+
+        let (respData, response): (Data, URLResponse)
+        do {
+            (respData, response) = try await session.data(for: req)
+        } catch let err as URLError where err.code == .timedOut {
+            throw POHError.requestTimeout
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw POHError.httpError(statusCode: 0, message: "No HTTP response")
+        }
+        // 202 = job not ready yet — still decode as T
+        guard (200..<300).contains(http.statusCode) || http.statusCode == 202 else {
+            let msg = (try? JSONDecoder().decode(APIErrorBody.self, from: respData))?.error
+                ?? String(data: respData, encoding: .utf8)
+                ?? "HTTP \(http.statusCode)"
+            throw POHError.httpError(statusCode: http.statusCode, message: msg)
+        }
+        do {
+            return try decoder.decode(T.self, from: respData)
+        } catch {
+            throw POHError.decodingError(error)
+        }
+    }
+}
+
+// ── Private request/response types ───────────────────────────────────────────
+
+private struct RegisterKeyBody: Encodable {
+    let address: String
+    let signingPublicKey: String
+    let proof: String
+}
+
+// ── Private response types for natural language job routing ───────────────────
+
+private struct ChatRouteResponse: Decodable {
+    let type: String
+    let skillId: String?
+    let input: JSONValue?
+    let reason: String?
+}
+
+private struct JobResultEnvelope: Decodable {
+    let jobId: String
+    let status: String?
+    let verdict: String?
+    struct Profile: Decodable {
+        let skillOutput: JSONValue?
+        let nlResponse: String?
+        let skillId: String?
+        let tokensUsed: Int?
+    }
+    let profile: Profile?
+    let error: String?
 }
