@@ -228,6 +228,253 @@ final class POHClientTests: XCTestCase {
         let req = try XCTUnwrap(mock.requestsMade.first)
         XCTAssertEqual(req.value(forHTTPHeaderField: "x-api-key"), "test-key-abc")
     }
+
+    // ── getNodeInfo ────────────────────────────────────────────────────────────
+
+    func testGetNodeInfoDecodesMetadata() async throws {
+        mock.enqueueRaw(#"{"status":"ok","nodeId":"node-42","version":"1.2.0","peers":3}"#)
+
+        let info = try await client.getNodeInfo()
+
+        XCTAssertEqual(info.nodeId, "node-42")
+        XCTAssertEqual(info.version, "1.2.0")
+        XCTAssertEqual(info.peers, 3)
+    }
+
+    func testGetNodeInfoUsesGetMethod() async throws {
+        mock.enqueueRaw(#"{"status":"ok"}"#)
+
+        _ = try await client.getNodeInfo()
+
+        XCTAssertEqual(mock.requestsMade.first?.httpMethod, "GET")
+    }
+
+    // ── listSkills ─────────────────────────────────────────────────────────────
+
+    func testListSkillsDecodesArray() async throws {
+        mock.enqueueRaw(#"[{"id":"sk-1","description":"Summariser","triggers":["summarise"],"version":"1.0"}]"#)
+
+        let skills = try await client.listSkills()
+
+        XCTAssertEqual(skills.count, 1)
+        XCTAssertEqual(skills[0].id, "sk-1")
+        XCTAssertEqual(skills[0].description, "Summariser")
+    }
+
+    // ── getMinerInfo ───────────────────────────────────────────────────────────
+
+    func testGetMinerInfoDecodesMetadata() async throws {
+        mock.enqueueRaw(#"{"minerAddress":"poh-miner-1","gasPrice":1000,"model":"llama-3","queueLength":2,"reputation":4.5}"#)
+
+        let info = try await client.getMinerInfo()
+
+        XCTAssertEqual(info.minerAddress, "poh-miner-1")
+        XCTAssertEqual(info.model, "llama-3")
+        XCTAssertEqual(info.queueLength, 2)
+    }
+
+    // ── getBalance ─────────────────────────────────────────────────────────────
+
+    func testGetBalanceDecodesAddressAndBalance() async throws {
+        mock.enqueueRaw(#"{"address":"poh123","balance":5000000000}"#)
+
+        let bal = try await client.getBalance("poh123")
+
+        XCTAssertEqual(bal.address, "poh123")
+        XCTAssertEqual(bal.balance, 5_000_000_000)
+    }
+
+    func testGetBalanceIncludesAddressInQueryString() async throws {
+        mock.enqueueRaw(#"{"address":"poh123","balance":0}"#)
+
+        _ = try await client.getBalance("poh123")
+
+        let url = try XCTUnwrap(mock.requestsMade.first?.url?.absoluteString)
+        XCTAssertTrue(url.contains("poh123"))
+    }
+
+    // ── getNonce ───────────────────────────────────────────────────────────────
+
+    func testGetNonceDecodesCurrentNonce() async throws {
+        mock.enqueueRaw(#"{"address":"poh123","nonce":7}"#)
+
+        let n = try await client.getNonce("poh123")
+
+        XCTAssertEqual(n.address, "poh123")
+        XCTAssertEqual(n.nonce, 7)
+    }
+
+    // ── getTransactionHistory ──────────────────────────────────────────────────
+
+    func testGetTransactionHistoryDecodesEntries() async throws {
+        mock.enqueueRaw("""
+            {"address":"poh123","entries":[
+                {"height":100,"delta":1000000000,"txHash":"abc","ts":1700000000,"label":"transfer"}
+            ]}
+        """)
+
+        let hist = try await client.getTransactionHistory("poh123")
+
+        XCTAssertEqual(hist.address, "poh123")
+        XCTAssertEqual(hist.entries.count, 1)
+        XCTAssertEqual(hist.entries[0].delta, 1_000_000_000)
+        XCTAssertEqual(hist.entries[0].label, "transfer")
+    }
+
+    // ── getPendingTransactions ─────────────────────────────────────────────────
+
+    func testGetPendingTransactionsDecodesCount() async throws {
+        mock.enqueueRaw(#"{"txs":[],"count":0}"#)
+
+        let p = try await client.getPendingTransactions()
+
+        XCTAssertEqual(p.count, 0)
+        XCTAssertTrue(p.txs.isEmpty)
+    }
+
+    // ── submitTransaction ──────────────────────────────────────────────────────
+
+    func testSubmitTransactionPostsAndReturnsHash() async throws {
+        mock.enqueueRaw(#"{"ok":true,"txHash":"cafebabe","queueSize":1}"#)
+
+        let tx = PohTx(
+            from: "pohA", to: "pohB", amount: 1_000_000_000, fee: 0,
+            nonce: 1, timestamp: 1_700_000_000_000, memo: "",
+            txHash: "cafebabe", signature: "sig", signingPublicKey: "pub"
+        )
+        let result = try await client.submitTransaction(tx)
+
+        XCTAssertEqual(result.txHash, "cafebabe")
+        XCTAssertTrue(result.ok)
+    }
+
+    func testSubmitTransactionUsesPostMethod() async throws {
+        mock.enqueueRaw(#"{"ok":true,"txHash":"abc","queueSize":0}"#)
+
+        let tx = PohTx(
+            from: "pohA", to: "pohB", amount: 1_000_000_000, fee: 0,
+            nonce: 1, timestamp: 1_700_000_000_000, memo: "",
+            txHash: "abc", signature: "sig", signingPublicKey: "pub"
+        )
+        _ = try await client.submitTransaction(tx)
+
+        XCTAssertEqual(mock.requestsMade.first?.httpMethod, "POST")
+    }
+
+    // ── registerSigningKey ─────────────────────────────────────────────────────
+
+    func testRegisterSigningKeyPostsKeyAndProof() async throws {
+        mock.enqueueRaw(#"{"success":true}"#)
+
+        _ = try await client.registerSigningKey("pohA", publicKeyPem: "pubkey-pem", proof: "proof-b64")
+
+        let req = try XCTUnwrap(mock.requestsMade.first)
+        XCTAssertEqual(req.httpMethod, "POST")
+        let body = try XCTUnwrap(req.httpBody)
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        XCTAssertEqual(json?["address"] as? String, "pohA")
+        XCTAssertEqual(json?["signingPublicKey"] as? String, "pubkey-pem")
+        XCTAssertEqual(json?["proof"] as? String, "proof-b64")
+    }
+
+    // ── submitJob ──────────────────────────────────────────────────────────────
+
+    func testSubmitJobRoutesToSkillThenCreatesJob() async throws {
+        mock.enqueueRaw(#"{"type":"skill","skillId":"sk-sum","input":{}}"#)
+        mock.enqueueRaw(#"{"jobId":"jnl-1","status":"queued","statusUrl":null,"resultUrl":null,"message":null}"#)
+
+        let ref = try await client.submitJob("Summarise this")
+
+        XCTAssertEqual(ref.jobId, "jnl-1")
+        XCTAssertEqual(ref.status, "queued")
+    }
+
+    func testSubmitJobThrowsWhenNoSkillMatched() async {
+        mock.enqueueRaw(#"{"type":"chat","reason":"No skill matched"}"#, status: 422)
+
+        await XCTAssertThrowsErrorAsync(try await client.submitJob("random question")) { error in
+            guard case POHError.httpError(let code, _) = error else {
+                return XCTFail("Expected .httpError, got \(error)")
+            }
+            XCTAssertEqual(code, 422)
+        }
+    }
+
+    // ── getJobStatus ───────────────────────────────────────────────────────────
+
+    func testGetJobStatusDecodesStatus() async throws {
+        mock.enqueueRaw(#"{"jobId":"jnl-1","status":"computing","error":null,"updatedAt":null}"#)
+
+        let s = try await client.getJobStatus("jnl-1")
+
+        XCTAssertEqual(s.jobId, "jnl-1")
+        XCTAssertEqual(s.status, "computing")
+    }
+
+    // ── getJobResult ───────────────────────────────────────────────────────────
+
+    func testGetJobResultParsesCompletedResult() async throws {
+        mock.enqueueRaw("""
+            {"jobId":"jnl-1","status":"done",
+             "output":{"answer":42},"nlResponse":"The answer is 42.",
+             "skillId":"sk-1","tokensUsed":10,"error":null}
+        """)
+
+        let r = try await client.getJobResult("jnl-1")
+
+        XCTAssertEqual(r.jobId, "jnl-1")
+        XCTAssertEqual(r.status, "done")
+        XCTAssertEqual(r.nlResponse, "The answer is 42.")
+        XCTAssertEqual(r.tokensUsed, 10)
+        XCTAssertEqual(r.skillId, "sk-1")
+    }
+
+    // ── pollJobResult ──────────────────────────────────────────────────────────
+
+    func testPollJobResultFetchesResultWhenDone() async throws {
+        mock.enqueueRaw(#"{"jobId":"jnl-2","status":"done","error":null,"updatedAt":null}"#)
+        mock.enqueueRaw("""
+            {"jobId":"jnl-2","status":"done",
+             "output":null,"nlResponse":"Done!","skillId":"sk-1","tokensUsed":5,"error":null}
+        """)
+
+        let r = try await client.pollJobResult("jnl-2", options: .init(interval: 0.01))
+
+        XCTAssertEqual(r.nlResponse, "Done!")
+    }
+
+    // ── askAndWait ─────────────────────────────────────────────────────────────
+
+    func testAskAndWaitRoutesSubmitsAndPolls() async throws {
+        mock.enqueueRaw(#"{"type":"skill","skillId":"sk-1","input":{}}"#)
+        mock.enqueueRaw(#"{"jobId":"jnl-3","status":"queued","statusUrl":null,"resultUrl":null,"message":null}"#)
+        mock.enqueueRaw(#"{"jobId":"jnl-3","status":"done","error":null,"updatedAt":null}"#)
+        mock.enqueueRaw("""
+            {"jobId":"jnl-3","status":"done",
+             "output":null,"nlResponse":"Answer","skillId":"sk-1","tokensUsed":8,"error":null}
+        """)
+
+        let r = try await client.askAndWait(
+            "What is 2+2?",
+            options: .init(budget: 0.1),
+            pollOptions: .init(interval: 0.01)
+        )
+
+        XCTAssertEqual(r.nlResponse, "Answer")
+    }
+
+    // ── getMethod ─────────────────────────────────────────────────────────────
+
+    func testGetMethodDecodesSingleMethod() async throws {
+        mock.enqueueRaw("""
+            {"id":"m2","type":"solana","description":"SOL staking","score":2.5,"voteCount":12}
+        """)
+
+        let m = try await client.getMethod("m2")
+
+        XCTAssertEqual(m.id, "m2")
+        XCTAssertEqual(m.type, "solana")
+    }
 }
 
 // ── XCTest async helper ────────────────────────────────────────────────────────

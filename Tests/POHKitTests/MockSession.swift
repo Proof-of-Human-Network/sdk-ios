@@ -26,6 +26,11 @@ final class MockSession: HTTPSession {
         let body = ["error": message]
         responses.append((try JSONEncoder().encode(body), status))
     }
+
+    /// Enqueue a raw JSON string — works for types that are not Encodable.
+    func enqueueRaw(_ json: String, status: Int = 200) {
+        responses.append((data: Data(json.utf8), statusCode: status))
+    }
 }
 
 // ── Fixture builders ───────────────────────────────────────────────────────────
