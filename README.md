@@ -79,11 +79,17 @@ let done = try await poh.scanAndWait(["0xaaa...", "0xbbb..."])
 
 Ask the network a free-form question; the node routes it to the best skill automatically.
 
+Skill jobs always require a fee — pass `budget`, `walletAddress`, and
+`privateKeyPem` on `AskOptions` so the SDK can sign the payment. The node
+verifies the signature and debits the fee before it will run the job at all;
+it rejects the request outright (no job ever runs) without a valid signed
+payment.
+
 ```swift
 // Fire and forget — returns a job reference
 let ref = try await poh.submitJob(
     "What does vitalik.eth write about on Paragraph?",
-    options: .init(budget: 0.5, walletAddress: "poh...")
+    options: .init(budget: 0.5, walletAddress: "poh...", privateKeyPem: myPrivateKey)
 )
 
 // Poll until the answer arrives
@@ -93,12 +99,34 @@ print(result.nlResponse ?? "")
 // Convenience: submit and wait in one call
 let result = try await poh.askAndWait(
     "Summarise the last 5 posts from mirror.xyz/user.eth",
-    askOptions:  .init(budget: 0.5, walletAddress: "poh..."),
+    askOptions:  .init(budget: 0.5, walletAddress: "poh...", privateKeyPem: myPrivateKey),
     pollOptions: .init(timeout: 60)
 )
 print(result.output)      // skill-specific structured output
 print(result.nlResponse)  // natural language summary
 ```
+
+## Compute Jobs (your own model + dataset)
+
+Run inference with a model of your choice, optionally grounded in a Hugging
+Face dataset already installed on the node. Like skill jobs, compute jobs are
+never free — `runCompute` always signs a fee payment.
+
+```swift
+let ref = try await poh.runCompute("Summarize the top 5 rows", options: .init(
+    model: "llama3.1:8b",
+    dataset: "some-org/some-dataset", // optional
+    budget: 0.5,                      // POH
+    walletAddress: "poh...",
+    privateKeyPem: myPrivateKey
+))
+let result = try await poh.pollJobResult(ref.jobId)
+print(result.output)
+```
+
+Before either of these will work, the wallet's signing key must be registered
+with the node once via `registerSigningKey(_:publicKeyPem:proof:)` — the node
+has no way to verify a signature for a key it has never seen.
 
 ---
 
@@ -288,7 +316,8 @@ do {
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `submitJob(_:options:)` | `AskJobRef` | Route and submit a question |
+| `submitJob(_:options:)` | `AskJobRef` | Route and submit a question. Skill jobs always require a fee — pass `budget`, `walletAddress`, `privateKeyPem`. |
+| `runCompute(_:options:)` | `AskJobRef` | Submit a job that runs a specific `model` (and optional `dataset`). Always requires a fee. |
 | `getJobStatus(_:)` | `AskJobStatus` | Lightweight status check |
 | `getJobResult(_:)` | `AskJobResult` | Full result (call after done) |
 | `pollJobResult(_:options:)` | `AskJobResult` | Poll until answer arrives |
@@ -317,6 +346,8 @@ do {
 | `buildTransfer(from:to:amountPOH:nonce:fee:memo:)` | `PohTx` | Build unsigned transfer |
 | `signTransaction(_:keyPair:)` | `PohTx` | Sign with a `POHKeyPair` |
 | `signTransaction(_:privateKeyPem:publicKeyPem:)` | `PohTx` | Sign with raw PEM strings |
+| `computeJobPaymentHash(jobId:requesterAddress:minerAddress:amount:nonce:)` | `String` | Canonical hash for a job fee payment (used internally by `submitJob`/`runCompute`) |
+| `signJobPayment(jobId:requesterAddress:minerAddress:amount:nonce:privateKeyPem:)` | `(txHash: String, signature: String)` | Sign a job fee payment proof (used internally) |
 
 ### Node Info
 

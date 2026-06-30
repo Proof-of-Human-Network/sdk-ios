@@ -330,7 +330,12 @@ public final class POHClient {
     /// Returns immediately with an ``AskJobRef``; use ``pollJobResult(_:options:)``
     /// or ``askAndWait(_:askOptions:pollOptions:)`` to wait for the answer.
     ///
-    /// - Throws: ``POHError/httpError(statusCode:message:)`` with status 422 if no skill matches.
+    /// Skill jobs always require a fee — pass `budget`, `walletAddress`, and
+    /// `privateKeyPem` on ``AskOptions`` so the request can be signed. The node
+    /// verifies the signature and debits the fee before it will run the job at all.
+    ///
+    /// - Throws: ``POHError/httpError(statusCode:message:)`` with status 422 if no skill matches,
+    ///   or 402 if `budget > 0` but `walletAddress`/`privateKeyPem` are missing.
     public func submitJob(_ question: String, options: AskOptions = .init()) async throws -> AskJobRef {
         let maxBudget = Int64(options.budget * 1_000_000_000)
 
@@ -342,13 +347,75 @@ public final class POHClient {
         }
 
         // 2. Submit the job
+        let jobId = POHSigning.generateJobId()
         var jobBody: [String: Any] = [
+            "id": jobId,
             "type": "skill",
             "skillId": skillId,
             "payload": encodeJSONValue(route.input) ?? [:],
             "maxBudget": maxBudget,
         ]
         if let addr = options.walletAddress { jobBody["requesterAddress"] = addr }
+
+        // Skill jobs always require a fee — sign the payment when budget > 0.
+        // No "unverified" fallback: the node rejects the job outright (never
+        // runs it) without a valid signed payment proof.
+        if maxBudget > 0 {
+            guard let requester = options.walletAddress else {
+                throw POHError.httpError(statusCode: 402, message: "submitJob: walletAddress is required when budget > 0")
+            }
+            guard let privateKeyPem = options.privateKeyPem else {
+                throw POHError.httpError(statusCode: 402, message: "submitJob: privateKeyPem is required when budget > 0 — skill jobs always require a signed fee.")
+            }
+            let minerInfo = try await getMinerInfo()
+            let nonceInfo = try await getNonce(requester)
+            let proof = try POHSigning.signJobPayment(
+                jobId: jobId, requesterAddress: requester, minerAddress: minerInfo.minerAddress,
+                amount: maxBudget, nonce: nonceInfo.nonce, privateKeyPem: privateKeyPem
+            )
+            jobBody["paymentTx"] = ["txHash": proof.txHash, "signature": proof.signature]
+        }
+
+        return try await requestAny("POST", path: "/job", anyBody: jobBody)
+    }
+
+    /// Submit a paid compute job that runs a user-specified model (and, optionally,
+    /// grounds the answer in a Hugging Face dataset already installed on the node).
+    /// Compute jobs are never free — the node rejects the request outright unless
+    /// it carries a valid signed fee payment.
+    ///
+    /// ```swift
+    /// let ref = try await poh.runCompute("Summarize the top 5 rows", options: ComputeOptions(
+    ///     model: "llama3.1:8b", dataset: "some-org/some-dataset",
+    ///     budget: 0.5, walletAddress: myAddress, privateKeyPem: myPrivateKey
+    /// ))
+    /// let result = try await poh.pollJobResult(ref.jobId)
+    /// ```
+    public func runCompute(_ prompt: String, options: ComputeOptions) async throws -> AskJobRef {
+        guard options.budget > 0 else {
+            throw POHError.httpError(statusCode: 402, message: "runCompute: budget must be > 0 — compute jobs always require a fee")
+        }
+        let jobId     = options.jobId ?? POHSigning.generateJobId()
+        let maxBudget = Int64(options.budget * 1_000_000_000)
+
+        let minerInfo = try await getMinerInfo()
+        let nonceInfo = try await getNonce(options.walletAddress)
+        let proof = try POHSigning.signJobPayment(
+            jobId: jobId, requesterAddress: options.walletAddress, minerAddress: minerInfo.minerAddress,
+            amount: maxBudget, nonce: nonceInfo.nonce, privateKeyPem: options.privateKeyPem
+        )
+
+        var jobBody: [String: Any] = [
+            "id": jobId,
+            "type": "compute",
+            "model": options.model,
+            "payload": ["prompt": prompt],
+            "maxBudget": maxBudget,
+            "requesterAddress": options.walletAddress,
+            "paymentTx": ["txHash": proof.txHash, "signature": proof.signature],
+        ]
+        if let dataset = options.dataset { jobBody["dataset"] = dataset }
+
         return try await requestAny("POST", path: "/job", anyBody: jobBody)
     }
 

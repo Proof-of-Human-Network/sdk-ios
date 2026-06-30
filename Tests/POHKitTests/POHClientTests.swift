@@ -400,6 +400,79 @@ final class POHClientTests: XCTestCase {
         }
     }
 
+    func testSubmitJobThrowsWhenBudgetPositiveWithoutPrivateKey() async {
+        mock.enqueueRaw(#"{"type":"skill","skillId":"sk-sum","input":{}}"#)
+
+        await XCTAssertThrowsErrorAsync(
+            try await client.submitJob("Summarise this", options: .init(budget: 0.5, walletAddress: "pohAlice"))
+        ) { error in
+            guard case POHError.httpError(let code, _) = error else {
+                return XCTFail("Expected .httpError, got \(error)")
+            }
+            XCTAssertEqual(code, 402)
+        }
+    }
+
+    func testSubmitJobSignsNonceBoundPaymentProofWhenBudgetPositive() async throws {
+        let kp = POHSigning.generateKeyPair()
+        mock.enqueueRaw(#"{"type":"skill","skillId":"sk-sum","input":{}}"#)
+        mock.enqueueRaw(#"{"minerAddress":"pohMiner","gasPrice":1,"model":"qwen2.5:1.5b","queueLength":0,"reputation":1.0}"#)
+        mock.enqueueRaw(#"{"address":"pohAlice","nonce":3}"#)
+        mock.enqueueRaw(#"{"jobId":"jnl-1","status":"queued","statusUrl":null,"resultUrl":null,"message":null}"#)
+
+        let ref = try await client.submitJob("Summarise this", options: .init(
+            budget: 0.5, walletAddress: "pohAlice", privateKeyPem: kp.signingPrivateKey
+        ))
+
+        XCTAssertEqual(ref.jobId, "jnl-1")
+        let req  = try XCTUnwrap(mock.requestsMade.last)
+        let body = try XCTUnwrap(req.httpBody)
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        XCTAssertEqual(json?["maxBudget"] as? Int64, 500_000_000)
+        XCTAssertEqual(json?["requesterAddress"] as? String, "pohAlice")
+        let paymentTx = try XCTUnwrap(json?["paymentTx"] as? [String: Any])
+        XCTAssertNotNil(paymentTx["txHash"])
+        XCTAssertNotNil(paymentTx["signature"])
+    }
+
+    // ── runCompute ─────────────────────────────────────────────────────────────
+
+    func testRunComputeThrowsWhenBudgetNotPositive() async throws {
+        let kp = POHSigning.generateKeyPair()
+        await XCTAssertThrowsErrorAsync(
+            try await client.runCompute("hi", options: .init(
+                model: "qwen2.5:1.5b", budget: 0, walletAddress: "pohAlice", privateKeyPem: kp.signingPrivateKey
+            ))
+        ) { error in
+            guard case POHError.httpError(let code, _) = error else {
+                return XCTFail("Expected .httpError, got \(error)")
+            }
+            XCTAssertEqual(code, 402)
+        }
+    }
+
+    func testRunComputeSignsPaymentAndPostsModelDataset() async throws {
+        let kp = POHSigning.generateKeyPair()
+        mock.enqueueRaw(#"{"minerAddress":"pohMiner","gasPrice":1,"model":"qwen2.5:1.5b","queueLength":0,"reputation":1.0}"#)
+        mock.enqueueRaw(#"{"address":"pohAlice","nonce":7}"#)
+        mock.enqueueRaw(#"{"jobId":"jc-1","status":"queued","statusUrl":null,"resultUrl":null,"message":null}"#)
+
+        let ref = try await client.runCompute("Summarize the top rows", options: .init(
+            model: "llama3.1:8b", dataset: "some-org/some-dataset",
+            budget: 0.5, walletAddress: "pohAlice", privateKeyPem: kp.signingPrivateKey
+        ))
+
+        XCTAssertEqual(ref.jobId, "jc-1")
+        let req  = try XCTUnwrap(mock.requestsMade.last)
+        let body = try XCTUnwrap(req.httpBody)
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        XCTAssertEqual(json?["model"] as? String, "llama3.1:8b")
+        XCTAssertEqual(json?["dataset"] as? String, "some-org/some-dataset")
+        XCTAssertEqual(json?["maxBudget"] as? Int64, 500_000_000)
+        let payload = try XCTUnwrap(json?["payload"] as? [String: Any])
+        XCTAssertEqual(payload["prompt"] as? String, "Summarize the top rows")
+    }
+
     // ── getJobStatus ───────────────────────────────────────────────────────────
 
     func testGetJobStatusDecodesStatus() async throws {
@@ -456,7 +529,7 @@ final class POHClientTests: XCTestCase {
 
         let r = try await client.askAndWait(
             "What is 2+2?",
-            options: .init(budget: 0.1),
+            askOptions: .init(budget: 0),
             pollOptions: .init(interval: 0.01)
         )
 

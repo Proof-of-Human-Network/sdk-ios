@@ -173,10 +173,43 @@ public struct AskOptions {
     public var budget: Double
     /// Wallet address to charge the budget from. Required when budget > 0.
     public var walletAddress: String?
+    /// PKCS8 PEM Ed25519 private key used to sign the fee payment. Required when
+    /// budget > 0 — skill jobs always require a fee, and the node rejects the job
+    /// outright without a valid signed payment proof.
+    public var privateKeyPem: String?
 
-    public init(budget: Double = 0, walletAddress: String? = nil) {
+    public init(budget: Double = 0, walletAddress: String? = nil, privateKeyPem: String? = nil) {
         self.budget        = budget
         self.walletAddress = walletAddress
+        self.privateKeyPem = privateKeyPem
+    }
+}
+
+/// Options for submitting a paid compute job (user-specified model + dataset).
+public struct ComputeOptions {
+    /// Which model to run, e.g. "qwen2.5:1.5b", "llama3.1:8b".
+    public var model: String
+    /// Optional Hugging Face dataset id to ground the answer in (must be installed on the node).
+    public var dataset: String?
+    /// Fee in POH (e.g. 0.5 = 0.5 POH). Required — compute jobs are never free.
+    public var budget: Double
+    /// Wallet address paying the fee.
+    public var walletAddress: String
+    /// PKCS8 PEM Ed25519 private key used to sign the fee payment.
+    public var privateKeyPem: String
+    /// Optional explicit job id. Auto-generated if omitted.
+    public var jobId: String?
+
+    public init(
+        model: String, dataset: String? = nil, budget: Double,
+        walletAddress: String, privateKeyPem: String, jobId: String? = nil
+    ) {
+        self.model         = model
+        self.dataset       = dataset
+        self.budget        = budget
+        self.walletAddress = walletAddress
+        self.privateKeyPem = privateKeyPem
+        self.jobId         = jobId
     }
 }
 

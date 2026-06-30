@@ -92,14 +92,84 @@ public enum POHSigning {
 
     // ── Transaction ───────────────────────────────────────────────────────────
 
+    /// Escape a string for embedding in the canonical JSON payload below, matching
+    /// JavaScript's `JSON.stringify` escaping exactly (`"`, `\`, and control characters).
+    /// Required for `computeTxHash` to byte-for-byte match the node's own hash — the
+    /// node recomputes this hash from the transaction's fields and rejects any
+    /// transaction whose `txHash` doesn't match, so any escaping divergence (e.g. an
+    /// unescaped `"` in a memo) would make the resulting transaction unsendable.
+    private static func jsonEscape(_ s: String) -> String {
+        var result = ""
+        result.reserveCapacity(s.count)
+        for scalar in s.unicodeScalars {
+            switch scalar {
+            case "\"": result += "\\\""
+            case "\\": result += "\\\\"
+            case "\n": result += "\\n"
+            case "\r": result += "\\r"
+            case "\t": result += "\\t"
+            case "\u{08}": result += "\\b"
+            case "\u{0C}": result += "\\f"
+            default:
+                if scalar.value < 0x20 {
+                    result += String(format: "\\u%04x", scalar.value)
+                } else {
+                    result.unicodeScalars.append(scalar)
+                }
+            }
+        }
+        return result
+    }
+
     /// Compute the SHA-256 transaction hash over canonical fields. Returns a lowercase hex string.
     public static func computeTxHash(
         from: String, to: String, amount: Int64, fee: Int64,
         nonce: Int64, timestamp: Int64, memo: String
     ) -> String {
-        let canonical = #"{"from":"\#(from)","to":"\#(to)","amount":\#(amount),"fee":\#(fee),"nonce":\#(nonce),"timestamp":\#(timestamp),"memo":"\#(memo)"}"#
+        let canonical = "{\"from\":\"\(jsonEscape(from))\",\"to\":\"\(jsonEscape(to))\",\"amount\":\(amount),\"fee\":\(fee),\"nonce\":\(nonce),\"timestamp\":\(timestamp),\"memo\":\"\(jsonEscape(memo))\"}"
         let hash = SHA256.hash(data: Data(canonical.utf8))
         return hash.map { String(format: "%02x", $0) }.joined()
+    }
+
+    // ── Job fee payment ──────────────────────────────────────────────────────
+
+    /// Compute the canonical payment hash for a job fee. Binds the fee to one
+    /// specific job + miner + amount + nonce, so a signature over it can't be
+    /// replayed against a different job or a higher budget. Must byte-for-byte
+    /// match the node's own `computeJobPaymentHash`.
+    public static func computeJobPaymentHash(
+        jobId: String, requesterAddress: String, minerAddress: String,
+        amount: Int64, nonce: Int64
+    ) -> String {
+        let canonical = "{\"jobId\":\"\(jsonEscape(jobId))\",\"requesterAddress\":\"\(jsonEscape(requesterAddress))\",\"minerAddress\":\"\(jsonEscape(minerAddress))\",\"amount\":\(amount),\"nonce\":\(nonce)}"
+        let hash = SHA256.hash(data: Data(canonical.utf8))
+        return hash.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Sign a fee payment authorizing a fee-required job (skill execution, or a
+    /// model/dataset compute job). The result (`txHash`, `signature`) goes in the
+    /// `paymentTx` field of a `POST /job` request — the node verifies the
+    /// signature and debits the requester's balance before it will run the job.
+    public static func signJobPayment(
+        jobId: String, requesterAddress: String, minerAddress: String,
+        amount: Int64, nonce: Int64, privateKeyPem: String
+    ) throws -> (txHash: String, signature: String) {
+        let txHash = computeJobPaymentHash(
+            jobId: jobId, requesterAddress: requesterAddress, minerAddress: minerAddress,
+            amount: amount, nonce: nonce
+        )
+        let signature = try signData(txHash, privateKeyPem: privateKeyPem)
+        return (txHash, signature)
+    }
+
+    /// Generate a client-side job id (`job-<millis>-<8 random hex chars>`), matching
+    /// the shape the node itself would generate if `id` were omitted from the request.
+    /// Fee-required jobs must fix the id before signing, since the payment proof is
+    /// bound to it.
+    public static func generateJobId() -> String {
+        let millis = Int64(Date().timeIntervalSince1970 * 1000)
+        let suffix = (0..<4).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+        return "job-\(millis)-\(suffix)"
     }
 
     /// Build an unsigned PoH transfer transaction.
