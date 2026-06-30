@@ -23,6 +23,7 @@ public let pohDefaultNodes: [URL] = [
 public final class POHClient {
 
     private let candidateURLs: [URL]
+    private let localBaseURL:  URL?
     private let apiKey:        String?
     private let walletAddress: String?
     private let timeout:       TimeInterval
@@ -38,12 +39,14 @@ public final class POHClient {
     /// Create a client that targets a single node (legacy / backwards-compatible).
     public convenience init(
         baseURL:       URL,
+        localBaseURL:  URL? = nil,
         apiKey:        String? = nil,
         walletAddress: String? = nil,
         timeout:       TimeInterval = 30
     ) {
         self.init(
             nodes:         [baseURL],
+            localBaseURL:  localBaseURL,
             apiKey:        apiKey,
             walletAddress: walletAddress,
             timeout:       timeout,
@@ -55,12 +58,14 @@ public final class POHClient {
     /// Falls back to ``pohDefaultNodes`` when *nodes* is empty.
     public convenience init(
         nodes:         [URL]         = pohDefaultNodes,
+        localBaseURL:  URL?          = nil,
         apiKey:        String?       = nil,
         walletAddress: String?       = nil,
         timeout:       TimeInterval  = 30
     ) {
         self.init(
             nodes:         nodes.isEmpty ? pohDefaultNodes : nodes,
+            localBaseURL:  localBaseURL,
             apiKey:        apiKey,
             walletAddress: walletAddress,
             timeout:       timeout,
@@ -70,6 +75,7 @@ public final class POHClient {
 
     init(
         nodes:         [URL],
+        localBaseURL:  URL?         = nil,
         apiKey:        String?      = nil,
         walletAddress: String?      = nil,
         timeout:       TimeInterval = 30,
@@ -81,6 +87,11 @@ public final class POHClient {
             return URL(string: s)!
         }
         self.candidateURLs = cleaned
+        self.localBaseURL  = localBaseURL.map { url -> URL in
+            var s = url.absoluteString
+            if s.hasSuffix("/") { s.removeLast() }
+            return URL(string: s)!
+        }
         self.activeNode    = cleaned.count == 1 ? cleaned[0] : nil
         self.apiKey        = apiKey
         self.walletAddress = walletAddress
@@ -130,6 +141,31 @@ public final class POHClient {
         if let node = activeNode { return node }
         await connect()
         return activeNode ?? candidateURLs[0]
+    }
+
+    private func needsLocalNode(method: String, path: String) -> Bool {
+        let m = method.uppercased()
+        if m == "GET" || m == "HEAD" || m == "OPTIONS" { return false }
+        let p = path.split(separator: "?").first.map(String.init) ?? path
+        return !(m == "POST" && p == "/gossip")
+    }
+
+    private func isLoopback(_ url: URL) -> Bool {
+        guard let host = url.host else { return false }
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+    }
+
+    private func resolvedBase(method: String, path: String) async throws -> URL {
+        if !needsLocalNode(method: method, path: path) {
+            return await resolvedBase()
+        }
+        if let local = localBaseURL { return local }
+        let remote = await resolvedBase()
+        if isLoopback(remote) { return remote }
+        throw POHError.httpError(
+            statusCode: 403,
+            message: "This operation requires a local miner node. Pass localBaseURL: URL(string: \"http://127.0.0.1:3456\")!"
+        )
     }
 
     // ── Scan ───────────────────────────────────────────────────────────────────
@@ -490,7 +526,10 @@ public final class POHClient {
 
     /// List all skills available on the connected node.
     public func listSkills() async throws -> [Skill] {
-        return try await request("GET", path: "/api/skills")
+        let data = try await fetchData("GET", path: "/api/skills")
+        if let skills = try? decoder.decode([Skill].self, from: data) { return skills }
+        struct SkillsEnvelope: Decodable { let skills: [Skill] }
+        return try decoder.decode(SkillsEnvelope.self, from: data).skills
     }
 
     // ── Wallet / blockchain ──────────────────────────────────────────────────────
@@ -529,9 +568,23 @@ public final class POHClient {
     ///   - publicKeyPem: SPKI PEM public key from ``POHSigning/generateKeyPair()``.
     ///   - proof:        Signature of *address* — from ``POHSigning/createSigningProof(_:privateKeyPem:)``.
     @discardableResult
-    public func registerSigningKey(_ address: String, publicKeyPem: String, proof: String) async throws -> [String: JSONValue] {
-        let body = RegisterKeyBody(address: address, signingPublicKey: publicKeyPem, proof: proof)
+    public func registerSigningKey(
+        _ address: String,
+        publicKeyPem: String,
+        proof: String,
+        rotationProof: String? = nil
+    ) async throws -> [String: JSONValue] {
+        let body = RegisterKeyBody(
+            address: address, signingPublicKey: publicKeyPem, proof: proof, rotationProof: rotationProof
+        )
         return try await request("POST", path: "/api/wallet/register-key", body: body)
+    }
+
+    /// Register a keypair from ``POHSigning/generateKeyPair()``.
+    @discardableResult
+    public func registerKeyPair(_ keyPair: POHKeyPair, rotationProof: String? = nil) async throws -> [String: JSONValue] {
+        let proof = try POHSigning.createSigningProof(walletAddress: keyPair.address, privateKeyPem: keyPair.signingPrivateKey)
+        return try await registerSigningKey(keyPair.address, publicKeyPem: keyPair.signingPublicKey, proof: proof, rotationProof: rotationProof)
     }
 
     /// Fetch detailed information about the connected miner node.
@@ -559,19 +612,20 @@ public final class POHClient {
         memo: String = ""
     ) async throws -> TxSubmitResult {
         let nonceResp = try await getNonce(from)
-        let tx        = POHSigning.buildTransfer(from: from, to: to, amountPOH: amountPOH, nonce: nonceResp.nonce + 1, fee: fee, memo: memo)
+        let nextNonce = (nonceResp.pendingNonce ?? nonceResp.nonce) + 1
+        let tx        = POHSigning.buildTransfer(from: from, to: to, amountPOH: amountPOH, nonce: nextNonce, fee: fee, memo: memo)
         let signed    = try POHSigning.signTransaction(tx, keyPair: keyPair)
         return try await submitTransaction(signed)
     }
 
     // ── Internal ───────────────────────────────────────────────────────────────
 
-    private func request<T: Decodable>(
+    private func fetchData(
         _ method: String,
         path: String,
         body: (some Encodable)? = nil as String?
-    ) async throws -> T {
-        let base = await resolvedBase()
+    ) async throws -> Data {
+        let base = try await resolvedBase(method: method, path: path)
         guard let url = URL(string: base.absoluteString + path) else {
             throw POHError.invalidBaseURL
         }
@@ -605,6 +659,15 @@ public final class POHClient {
             throw POHError.httpError(statusCode: http.statusCode, message: msg)
         }
 
+        return data
+    }
+
+    private func request<T: Decodable>(
+        _ method: String,
+        path: String,
+        body: (some Encodable)? = nil as String?
+    ) async throws -> T {
+        let data = try await fetchData(method, path: path, body: body)
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
@@ -637,7 +700,7 @@ public final class POHClient {
         anyBody: [String: Any]
     ) async throws -> T {
         let data = try JSONSerialization.data(withJSONObject: anyBody)
-        let base = await resolvedBase()
+        let base = try await resolvedBase(method: method, path: path)
         guard let url = URL(string: base.absoluteString + path) else {
             throw POHError.invalidBaseURL
         }
@@ -677,6 +740,7 @@ private struct RegisterKeyBody: Encodable {
     let address: String
     let signingPublicKey: String
     let proof: String
+    let rotationProof: String?
 }
 
 // ── Private response types for natural language job routing ───────────────────

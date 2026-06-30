@@ -64,12 +64,21 @@ public enum POHSigning {
 
     // ── Key generation ────────────────────────────────────────────────────────
 
+    /// Derive the canonical poh address bound to an ed25519 SPKI PEM public key.
+    public static func deriveAddressFromSigningKey(_ signingPublicKey: String) -> String {
+        let digest = SHA256.hash(data: Data(signingPublicKey.utf8))
+        let hex    = digest.map { String(format: "%02x", $0) }.joined()
+        return "poh" + String(hex.prefix(40))
+    }
+
     /// Generate a fresh Ed25519 keypair compatible with the PoH node.
     public static func generateKeyPair() -> POHKeyPair {
         let priv = Curve25519.Signing.PrivateKey()
+        let pubPem = exportPublicKeyPem(priv.publicKey)
         return POHKeyPair(
             signingPrivateKey: exportPrivateKeyPem(priv),
-            signingPublicKey:  exportPublicKeyPem(priv.publicKey)
+            signingPublicKey:  pubPem,
+            address:           deriveAddressFromSigningKey(pubPem)
         )
     }
 
@@ -88,6 +97,23 @@ public enum POHSigning {
     /// The proof is a base64 signature of the wallet address itself.
     public static func createSigningProof(walletAddress: String, privateKeyPem: String) throws -> String {
         return try signData(walletAddress, privateKeyPem: privateKeyPem)
+    }
+
+    /// Build the rotation proof required to replace an existing registered key.
+    public static func createRotationProof(
+        address: String,
+        newSigningPublicKey: String,
+        existingPrivateKeyPem: String
+    ) throws -> String {
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "action": "rotate-key",
+            "address": address,
+            "newSigningPublicKey": newSigningPublicKey,
+        ], options: [.sortedKeys])
+        guard let payloadStr = String(data: payload, encoding: .utf8) else {
+            throw POHError.decodingError(NSError(domain: "POHSigning", code: 3))
+        }
+        return try signData(payloadStr, privateKeyPem: existingPrivateKeyPem)
     }
 
     // ── Transaction ───────────────────────────────────────────────────────────

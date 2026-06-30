@@ -297,6 +297,7 @@ public struct WalletBalance: Decodable {
 public struct AccountNonce: Decodable {
     public let address: String
     public let nonce: Int64
+    public let pendingNonce: Int64?
 }
 
 /// A single entry in the wallet transaction history.
@@ -380,9 +381,12 @@ public struct POHKeyPair {
     public let signingPrivateKey: String
     /// SPKI PEM public key. Register with the node via ``POHClient/registerSigningKey(_:publicKeyPem:proof:)``.
     public let signingPublicKey: String
+    /// Canonical `poh…` address derived from ``signingPublicKey``.
+    public let address: String
 
-    public init(signingPrivateKey: String, signingPublicKey: String) {
+    public init(signingPrivateKey: String, signingPublicKey: String, address: String) {
         self.signingPrivateKey = signingPrivateKey
         self.signingPublicKey  = signingPublicKey
+        self.address           = address
     }
 }
