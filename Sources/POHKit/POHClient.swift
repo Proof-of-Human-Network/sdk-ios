@@ -2,7 +2,7 @@ import Foundation
 
 /// Default public bootstrap nodes for the PoH network.
 public let pohDefaultNodes: [URL] = [
-    URL(string: "https://bootnode.proofofhuman.ge")!,
+    URL(string: "https://miner.poh.ge")!,
     URL(string: "https://proofofhuman.ge")!,
     URL(string: "https://poh.assetux.com")!,
 ]

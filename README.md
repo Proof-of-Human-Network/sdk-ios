@@ -2,7 +2,7 @@
 
 Swift Package Manager SDK for the [Proof of Human](https://proofofhuman.ge) network.
 
-**Requirements:** iOS 13+, macOS 10.15+, tvOS 13+, watchOS 6+, Swift 5.9+  
+**Requirements:** iOS 15+, macOS 12+, tvOS 15+, watchOS 8+, Swift 5.9+  
 Zero dependencies — built on `URLSession`, Swift Concurrency, and `CryptoKit`.
 
 ---
@@ -11,13 +11,13 @@ Zero dependencies — built on `URLSession`, Swift Concurrency, and `CryptoKit`.
 
 ### Xcode
 
-**File → Add Package Dependencies** → paste the repository URL → choose version **1.3.0** (or `from: "1.3.0"`).
+**File → Add Package Dependencies** → paste the repository URL → choose version **1.5.0** (or `from: "1.5.0"`).
 
 ### Package.swift
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Proof-of-Human-Network/sdk-ios", from: "1.3.0"),
+    .package(url: "https://github.com/Proof-of-Human-Network/sdk-ios", from: "1.5.0"),
 ],
 targets: [
     .target(name: "MyApp", dependencies: [.product(name: "POHKit", package: "sdk-ios")]),
@@ -40,6 +40,12 @@ let poh = POHClient(
 // Multi-node client — auto-selects the fastest live node
 let poh = POHClient(nodes: pohDefaultNodes)
 try await poh.connect()              // optional: probe nodes before first call
+
+// Local miner routing — write operations (any non-GET request except
+// POST /gossip) must go to a node you control. Pass localBaseURL to route
+// them to your local miner while reads still use the public nodes; without
+// it, writes to a non-loopback node fail with a 403 POHError.httpError.
+let poh = POHClient(nodes: pohDefaultNodes, localBaseURL: URL(string: "http://127.0.0.1:3456")!)
 
 // Single scan
 let result = try await poh.scan("0xabc...")
@@ -191,6 +197,24 @@ try await poh.registerSigningKey(
     publicKeyPem: kp.signingPublicKey,
     proof: proof
 )
+
+// Or in one call — uses kp.address and builds the proof itself
+try await poh.registerKeyPair(kp)
+
+// The address a keypair maps to (from its SPKI PEM public key)
+let addr = POHSigning.deriveAddressFromSigningKey(kp.signingPublicKey)
+```
+
+**Rotating a key** — replacing an already-registered key requires a rotation
+proof signed with the *old* private key:
+
+```swift
+let proof = try POHSigning.createRotationProof(
+    address: "pohAbc123...",
+    newSigningPublicKey: newKp.signingPublicKey,
+    existingPrivateKeyPem: oldPrivateKeyPem
+)
+try await poh.registerKeyPair(newKp, rotationProof: proof)
 ```
 
 ### Build and sign a transaction
@@ -226,7 +250,10 @@ let result = try await poh.transfer(
 print(result.txHash)
 ```
 
-`transfer()` fetches the nonce, builds, signs, and submits in one call.
+`transfer()` fetches the nonce, builds, signs, and submits in one call. It is
+pending-aware: when the account has transactions waiting in the mempool it uses
+`pendingNonce + 1` (falling back to `nonce + 1`), so back-to-back transfers
+don't collide.
 
 ### Low-level hash and sign
 
@@ -239,6 +266,28 @@ let hash = POHSigning.computeTxHash(
 
 // Sign an arbitrary UTF-8 message
 let sig = try POHSigning.signData("hello", privateKeyPem: kp.signingPrivateKey)
+
+// Client-side job id ("job-<millis>-<8 hex>") — fee-required jobs must fix the
+// id before signing, since the payment proof is bound to it
+let jobId = POHSigning.generateJobId()
+```
+
+---
+
+## Chat Encryption (POHChatCrypto)
+
+End-to-end encryption for chat payloads (X25519 + HKDF + AES-256-GCM),
+compatible with the node's envelope format.
+
+```swift
+// Deterministic X25519 keypair from a stable secret (Data or String)
+let ekp = try POHChatCrypto.deriveEncryptionKeypair(stableSecret)
+
+// Encrypt for a recipient (plaintext as String or Data)
+let env = try POHChatCrypto.seal(recipientPubB64: their.publicKeyB64, plaintext: "hello")
+
+// Decrypt an envelope
+let plaintext = try POHChatCrypto.open(env, privateScalarB64: ekp.privateKeyB64)
 ```
 
 ---
@@ -295,8 +344,13 @@ do {
 
 | Init | Description |
 |------|-------------|
-| `POHClient(baseURL:apiKey:walletAddress:timeout:)` | Single-node client |
-| `POHClient(nodes:apiKey:walletAddress:timeout:)` | Multi-node — picks fastest live node |
+| `POHClient(baseURL:localBaseURL:apiKey:walletAddress:timeout:)` | Single-node client |
+| `POHClient(nodes:localBaseURL:apiKey:walletAddress:timeout:)` | Multi-node — picks fastest live node |
+
+`localBaseURL` (optional, both inits): local miner URL that write operations
+(any non-GET request except `POST /gossip`) are routed to; reads keep using
+the public nodes. Without it, writes to a non-loopback node throw a 403
+`POHError.httpError`.
 
 ### Scan
 
@@ -332,22 +386,34 @@ do {
 | `getTransactionHistory(_:limit:)` | `TxHistoryResult` | Recent tx history |
 | `getPendingTransactions()` | `PendingTxResult` | Mempool snapshot |
 | `submitTransaction(_:)` | `TxSubmitResult` | Submit a signed `PohTx` |
-| `registerSigningKey(_:publicKeyPem:proof:)` | `[String: JSONValue]` | Register Ed25519 public key |
-| `transfer(from:to:amountPOH:keyPair:fee:memo:)` | `TxSubmitResult` | Build, sign, submit in one call |
+| `registerSigningKey(_:publicKeyPem:proof:rotationProof:)` | `[String: JSONValue]` | Register Ed25519 public key |
+| `registerKeyPair(_:rotationProof:)` | `[String: JSONValue]` | Register a `POHKeyPair` — builds the proof itself |
+| `transfer(from:to:amountPOH:keyPair:fee:memo:)` | `TxSubmitResult` | Build, sign, submit in one call (pending-nonce aware) |
 
 ### Signing (POHSigning)
 
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `generateKeyPair()` | `POHKeyPair` | Fresh Ed25519 keypair |
+| `deriveAddressFromSigningKey(_:)` | `String` | `poh…` address from an SPKI PEM public key |
 | `signData(_:privateKeyPem:)` | `String` | Base64 Ed25519 signature |
 | `createSigningProof(walletAddress:privateKeyPem:)` | `String` | Proof for key registration |
+| `createRotationProof(address:newSigningPublicKey:existingPrivateKeyPem:)` | `String` | Proof (signed with the old key) to replace a registered key |
 | `computeTxHash(from:to:amount:fee:nonce:timestamp:memo:)` | `String` | SHA-256 canonical tx hash |
 | `buildTransfer(from:to:amountPOH:nonce:fee:memo:)` | `PohTx` | Build unsigned transfer |
 | `signTransaction(_:keyPair:)` | `PohTx` | Sign with a `POHKeyPair` |
 | `signTransaction(_:privateKeyPem:publicKeyPem:)` | `PohTx` | Sign with raw PEM strings |
+| `generateJobId()` | `String` | Client-side job id (`job-<millis>-<8 hex>`) |
 | `computeJobPaymentHash(jobId:requesterAddress:minerAddress:amount:nonce:)` | `String` | Canonical hash for a job fee payment (used internally by `submitJob`/`runCompute`) |
 | `signJobPayment(jobId:requesterAddress:minerAddress:amount:nonce:privateKeyPem:)` | `(txHash: String, signature: String)` | Sign a job fee payment proof (used internally) |
+
+### Chat Encryption (POHChatCrypto)
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `deriveEncryptionKeypair(_:)` | `EncryptionKeypair` | Deterministic X25519 keypair from a stable secret (`Data` or `String`) |
+| `seal(recipientPubB64:plaintext:)` | `SealedEnvelope` | Encrypt for a recipient (`Data` or `String` plaintext) |
+| `open(_:privateScalarB64:)` | `String` | Decrypt a sealed envelope |
 
 ### Node Info
 
