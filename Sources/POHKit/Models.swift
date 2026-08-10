@@ -185,9 +185,100 @@ public struct AskOptions {
     }
 }
 
+/// Max attachment size accepted by the miner (1 MB).
+public let MAX_ATTACHMENT_BYTES = 1 * 1024 * 1024
+
+/// One file attachment for chat/compute (≤1 MB). Prefer `dataUrl` for images.
+public struct ChatAttachment {
+    public var name: String
+    public var mime: String?
+    public var content: String?
+    public var contentBase64: String?
+    public var dataUrl: String?
+
+    public init(
+        name: String, mime: String? = nil, content: String? = nil,
+        contentBase64: String? = nil, dataUrl: String? = nil
+    ) {
+        self.name = name
+        self.mime = mime
+        self.content = content
+        self.contentBase64 = contentBase64
+        self.dataUrl = dataUrl
+    }
+
+    public func asDictionary() -> [String: Any] {
+        var d: [String: Any] = ["name": name]
+        if let mime { d["mime"] = mime }
+        if let content { d["content"] = content }
+        if let contentBase64 { d["contentBase64"] = contentBase64 }
+        if let dataUrl { d["dataUrl"] = dataUrl }
+        return d
+    }
+}
+
+/// Options for free-form chat (`POST /chat/ask`).
+public struct ChatOptions {
+    public var history: [[String: String]]?
+    public var model: String?
+    public var privateMode: Bool
+    public var attachments: [ChatAttachment]?
+    /// Force a dataset after approving a 412 HF_DATASET_DOWNLOAD_REQUIRED.
+    public var datasetId: String?
+    public var requesterAddress: String?
+
+    public init(
+        history: [[String: String]]? = nil, model: String? = nil,
+        privateMode: Bool = true, attachments: [ChatAttachment]? = nil,
+        datasetId: String? = nil, requesterAddress: String? = nil
+    ) {
+        self.history = history
+        self.model = model
+        self.privateMode = privateMode
+        self.attachments = attachments
+        self.datasetId = datasetId
+        self.requesterAddress = requesterAddress
+    }
+}
+
+/// Reply from ``POHClient/chat(_:options:)``.
+public struct ChatResult: Decodable {
+    public let type: String?
+    public let message: String
+    public let skill: String?
+    public let skillId: String?
+    public let cascade: Bool?
+    public let tasks: Bool?
+    public let dataset: String?
+    public let datasetId: String?
+    public let fromChainHistory: Bool?
+    public let code: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type, message, skill, skillId, cascade, tasks, dataset, datasetId
+        case fromChainHistory, code, reply
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = try c.decodeIfPresent(String.self, forKey: .type)
+        message = (try c.decodeIfPresent(String.self, forKey: .message))
+            ?? (try c.decodeIfPresent(String.self, forKey: .reply))
+            ?? ""
+        skill = try c.decodeIfPresent(String.self, forKey: .skill)
+        skillId = try c.decodeIfPresent(String.self, forKey: .skillId)
+        cascade = try c.decodeIfPresent(Bool.self, forKey: .cascade)
+        tasks = try c.decodeIfPresent(Bool.self, forKey: .tasks)
+        dataset = try c.decodeIfPresent(String.self, forKey: .dataset)
+        datasetId = try c.decodeIfPresent(String.self, forKey: .datasetId)
+        fromChainHistory = try c.decodeIfPresent(Bool.self, forKey: .fromChainHistory)
+        code = try c.decodeIfPresent(String.self, forKey: .code)
+    }
+}
+
 /// Options for submitting a paid compute job (user-specified model + dataset).
 public struct ComputeOptions {
-    /// Which model to run, e.g. "qwen2.5:1.5b", "llama3.1:8b".
+    /// Which model to run, e.g. "qwen3-1.7b", "qwen3vl-2b".
     public var model: String
     /// Optional Hugging Face dataset id to ground the answer in (must be installed on the node).
     public var dataset: String?
@@ -199,10 +290,16 @@ public struct ComputeOptions {
     public var privateKeyPem: String
     /// Optional explicit job id. Auto-generated if omitted.
     public var jobId: String?
+    public var history: [[String: String]]?
+    public var attachments: [ChatAttachment]?
+    /// When false, skip skill/task-cascade auto-routing on the miner.
+    public var route: Bool?
 
     public init(
         model: String, dataset: String? = nil, budget: Double,
-        walletAddress: String, privateKeyPem: String, jobId: String? = nil
+        walletAddress: String, privateKeyPem: String, jobId: String? = nil,
+        history: [[String: String]]? = nil, attachments: [ChatAttachment]? = nil,
+        route: Bool? = nil
     ) {
         self.model         = model
         self.dataset       = dataset
@@ -210,7 +307,21 @@ public struct ComputeOptions {
         self.walletAddress = walletAddress
         self.privateKeyPem = privateKeyPem
         self.jobId         = jobId
+        self.history       = history
+        self.attachments   = attachments
+        self.route         = route
     }
+}
+
+/// Installed HF datasets on the miner.
+public struct HfDatasetListResult: Decodable {
+    public let datasets: [JSONValue]
+}
+
+/// MCP server status from the miner.
+public struct McpStatusResult: Decodable {
+    public let servers: [JSONValue]?
+    public let tools: [JSONValue]?
 }
 
 public struct AskJobRef: Decodable {

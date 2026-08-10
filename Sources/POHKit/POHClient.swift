@@ -378,6 +378,13 @@ public final class POHClient {
         // 1. Route the question to a skill
         let routeBody: [String: Any] = ["message": question, "budget": maxBudget]
         let route: ChatRouteResponse = try await requestAny("POST", path: "/chat/route", anyBody: routeBody)
+        let freeTypes: Set<String> = ["cascade", "tasks", "dataset", "hf-model", "sequence"]
+        if let t = route.type, freeTypes.contains(t) {
+            throw POHError.httpError(
+                statusCode: 422,
+                message: "Route type \"\(t)\" is free (task cascade / dataset / media). Use chat() instead of submitJob()."
+            )
+        }
         guard route.type == "skill", let skillId = route.skillId else {
             throw POHError.httpError(statusCode: 422, message: "No skill available for: \"\(question)\"")
         }
@@ -431,6 +438,9 @@ public final class POHClient {
         guard options.budget > 0 else {
             throw POHError.httpError(statusCode: 402, message: "runCompute: budget must be > 0 — compute jobs always require a fee")
         }
+        if prompt.isEmpty && (options.attachments?.isEmpty ?? true) {
+            throw POHError.httpError(statusCode: 400, message: "runCompute: prompt or attachments required")
+        }
         let jobId     = options.jobId ?? POHSigning.generateJobId()
         let maxBudget = Int64(options.budget * 1_000_000_000)
 
@@ -441,18 +451,77 @@ public final class POHClient {
             amount: maxBudget, nonce: nonceInfo.nonce, privateKeyPem: options.privateKeyPem
         )
 
+        var payload: [String: Any] = [
+            "prompt": prompt.isEmpty ? "Please analyze the attached file(s)." : prompt,
+        ]
+        if let history = options.history { payload["history"] = history }
+        if let attachments = options.attachments {
+            payload["attachments"] = attachments.map { $0.asDictionary() }
+        }
+        if options.route == false { payload["route"] = false }
+
         var jobBody: [String: Any] = [
             "id": jobId,
             "type": "compute",
             "model": options.model,
-            "payload": ["prompt": prompt],
+            "payload": payload,
             "maxBudget": maxBudget,
             "requesterAddress": options.walletAddress,
             "paymentTx": ["txHash": proof.txHash, "signature": proof.signature],
         ]
         if let dataset = options.dataset { jobBody["dataset"] = dataset }
+        if options.route == false { jobBody["route"] = false }
 
         return try await requestAny("POST", path: "/job", anyBody: jobBody)
+    }
+
+    /// Free-form chat via `POST /chat/ask` (no fee). Runs task cascade when needed.
+    /// Attachments ≤1 MB; on HTTP 412 with `code == HF_DATASET_DOWNLOAD_REQUIRED`,
+    /// call ``downloadDataset(_:)`` then retry with `datasetId` set.
+    public func chat(_ message: String, options: ChatOptions = .init()) async throws -> ChatResult {
+        if message.isEmpty && (options.attachments?.isEmpty ?? true) {
+            throw POHError.httpError(statusCode: 400, message: "chat: message or attachments required")
+        }
+        var body: [String: Any] = [
+            "message": message.isEmpty ? "Please analyze the attached file(s)." : message,
+            "history": options.history ?? [],
+            "private": options.privateMode,
+        ]
+        if let model = options.model { body["model"] = model }
+        if let attachments = options.attachments {
+            body["attachments"] = attachments.map { $0.asDictionary() }
+        }
+        if let datasetId = options.datasetId { body["datasetId"] = datasetId }
+        if let addr = options.requesterAddress ?? walletAddress {
+            body["requesterAddress"] = addr
+        }
+        return try await requestAny("POST", path: "/chat/ask", anyBody: body)
+    }
+
+    /// List Hugging Face datasets installed on the miner.
+    public func listDatasets() async throws -> HfDatasetListResult {
+        return try await request("GET", path: "/api/hf-dataset")
+    }
+
+    /// Download + install a Hugging Face dataset on the miner (row-capped).
+    public func downloadDataset(_ datasetId: String) async throws -> JSONValue {
+        guard !datasetId.isEmpty else {
+            throw POHError.httpError(statusCode: 400, message: "downloadDataset: datasetId required")
+        }
+        return try await request("POST", path: "/api/hf-dataset/\(encoded(datasetId))/download")
+    }
+
+    /// Remove an installed HF dataset from the miner.
+    public func deleteDataset(_ datasetId: String) async throws {
+        guard !datasetId.isEmpty else {
+            throw POHError.httpError(statusCode: 400, message: "deleteDataset: datasetId required")
+        }
+        let _: JSONValue = try await request("DELETE", path: "/api/hf-dataset/\(encoded(datasetId))")
+    }
+
+    /// Status of configured MCP servers and their tools.
+    public func getMcpStatus() async throws -> McpStatusResult {
+        return try await request("GET", path: "/api/mcp/status")
     }
 
     /// Fetch the current status of a job (without fetching the full result).
@@ -464,11 +533,18 @@ public final class POHClient {
     /// Returns a result with `status = "computing"` if the job is not done yet.
     public func getJobResult(_ jobId: String) async throws -> AskJobResult {
         let raw: JobResultEnvelope = try await request("GET", path: "/job/\(encoded(jobId))/result")
+        // skill jobs → skillOutput; compute jobs → computeOutput
+        let output = raw.profile?.skillOutput ?? raw.profile?.computeOutput
+        let nl = raw.profile?.nlResponse
+            ?? {
+                if case .string(let s) = raw.profile?.computeOutput { return s }
+                return nil
+            }()
         return AskJobResult(
             jobId:      raw.jobId,
-            status:     raw.status ?? "computing",
-            output:     raw.profile?.skillOutput,
-            nlResponse: raw.profile?.nlResponse,
+            status:     raw.status ?? (raw.error != nil ? "error" : "done"),
+            output:     output,
+            nlResponse: nl,
             skillId:    raw.profile?.skillId,
             tokensUsed: raw.profile?.tokensUsed,
             error:      raw.error
@@ -656,7 +732,8 @@ public final class POHClient {
             let msg = (try? JSONDecoder().decode(APIErrorBody.self, from: data))?.error
                 ?? String(data: data, encoding: .utf8)
                 ?? "HTTP \(http.statusCode)"
-            throw POHError.httpError(statusCode: http.statusCode, message: msg)
+            let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            throw POHError.httpError(statusCode: http.statusCode, message: msg, body: body)
         }
 
         return data
@@ -724,7 +801,8 @@ public final class POHClient {
             let msg = (try? JSONDecoder().decode(APIErrorBody.self, from: respData))?.error
                 ?? String(data: respData, encoding: .utf8)
                 ?? "HTTP \(http.statusCode)"
-            throw POHError.httpError(statusCode: http.statusCode, message: msg)
+            let body = (try? JSONSerialization.jsonObject(with: respData)) as? [String: Any]
+            throw POHError.httpError(statusCode: http.statusCode, message: msg, body: body)
         }
         do {
             return try decoder.decode(T.self, from: respData)
@@ -758,6 +836,7 @@ private struct JobResultEnvelope: Decodable {
     let verdict: String?
     struct Profile: Decodable {
         let skillOutput: JSONValue?
+        let computeOutput: JSONValue?
         let nlResponse: String?
         let skillId: String?
         let tokensUsed: Int?
