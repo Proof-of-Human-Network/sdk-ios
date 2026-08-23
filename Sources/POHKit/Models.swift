@@ -28,7 +28,7 @@ public struct BrainPollOptions {
     }
 }
 
-/// Combined result of ``POHClient/scanAndVerdict(_:scanOptions:brainOptions:)``.
+/// Combined result of ``DAIClient/scanAndVerdict(_:scanOptions:brainOptions:)``.
 public struct ScanWithVerdict {
     public let scan:    ScanResult
     public let verdict: BrainVerdict
@@ -169,7 +169,7 @@ public struct BrainVerdict: Decodable {
 }
 
 public struct AskOptions {
-    /// Budget in POH (e.g. 0.5 = 0.5 POH). Converted to μPOH internally.
+    /// Budget in DAI (e.g. 0.5 = 0.5 DAI). Converted to μDAI internally.
     public var budget: Double
     /// Wallet address to charge the budget from. Required when budget > 0.
     public var walletAddress: String?
@@ -241,7 +241,7 @@ public struct ChatOptions {
     }
 }
 
-/// Reply from ``POHClient/chat(_:options:)``.
+/// Reply from ``DAIClient/chat(_:options:)``.
 public struct ChatResult: Decodable {
     public let type: String?
     public let message: String
@@ -282,7 +282,7 @@ public struct ComputeOptions {
     public var model: String
     /// Optional Hugging Face dataset id to ground the answer in (must be installed on the node).
     public var dataset: String?
-    /// Fee in POH (e.g. 0.5 = 0.5 POH). Required — compute jobs are never free.
+    /// Fee in DAI (e.g. 0.5 = 0.5 DAI). Required — compute jobs are never free.
     public var budget: Double
     /// Wallet address paying the fee.
     public var walletAddress: String
@@ -356,7 +356,7 @@ public struct AskJobResult: Decodable {
 
 // ── Node info ─────────────────────────────────────────────────────────────────
 
-/// Metadata about a PoH miner node.
+/// Metadata about a DAI miner node.
 public struct NodeInfo: Decodable {
     public let status:     String
     public let nodeId:     String?
@@ -396,14 +396,14 @@ public struct Method: Decodable, Identifiable {
 
 // ── Wallet / blockchain ───────────────────────────────────────────────────────
 
-/// Wallet balance returned by ``POHClient/getBalance(_:)``.
+/// Wallet balance returned by ``DAIClient/getBalance(_:)``.
 public struct WalletBalance: Decodable {
     public let address: String
-    /// Balance in μPOH (1 POH = 1_000_000_000 μPOH).
+    /// Balance in μDAI (1 DAI = 1_000_000_000 μDAI).
     public let balance: Int64
 }
 
-/// Account nonce returned by ``POHClient/getNonce(_:)``.
+/// Account nonce returned by ``DAIClient/getNonce(_:)``.
 /// Increment by 1 when building a new transaction.
 public struct AccountNonce: Decodable {
     public let address: String
@@ -420,21 +420,21 @@ public struct TxHistoryEntry: Decodable {
     public let label: String
 }
 
-/// Transaction history returned by ``POHClient/getTransactionHistory(_:limit:)``.
+/// Transaction history returned by ``DAIClient/getTransactionHistory(_:limit:)``.
 public struct TxHistoryResult: Decodable {
     public let address: String
     public let entries: [TxHistoryEntry]
 }
 
-/// A signed or unsigned PoH transaction.
+/// A signed or unsigned DAI transaction.
 ///
-/// Build with ``POHSigning/buildTransfer(from:to:amountPOH:nonce:fee:memo:)``,
-/// sign with ``POHSigning/signTransaction(_:privateKeyPem:publicKeyPem:)``,
-/// then submit with ``POHClient/submitTransaction(_:)``.
-public struct PohTx: Codable {
+/// Build with ``DAISigning/buildTransfer(from:to:amountDAI:nonce:fee:memo:)``,
+/// sign with ``DAISigning/signTransaction(_:privateKeyPem:publicKeyPem:)``,
+/// then submit with ``DAIClient/submitTransaction(_:)``.
+public struct DAITx: Codable {
     public let from: String
     public let to: String
-    /// Amount in μPOH (1 POH = 1_000_000_000 μPOH).
+    /// Amount in μDAI (1 DAI = 1_000_000_000 μDAI).
     public let amount: Int64
     public let fee: Int64
     public let nonce: Int64
@@ -464,20 +464,20 @@ public struct PohTx: Codable {
     }
 }
 
-/// Result returned by ``POHClient/submitTransaction(_:)``.
+/// Result returned by ``DAIClient/submitTransaction(_:)``.
 public struct TxSubmitResult: Decodable {
     public let ok: Bool
     public let txHash: String
     public let queueSize: Int64
 }
 
-/// Pending transaction pool returned by ``POHClient/getPendingTransactions()``.
+/// Pending transaction pool returned by ``DAIClient/getPendingTransactions()``.
 public struct PendingTxResult: Decodable {
     public let txs: [JSONValue]
     public let count: Int64
 }
 
-/// Detailed miner information returned by ``POHClient/getMinerInfo()``.
+/// Detailed miner information returned by ``DAIClient/getMinerInfo()``.
 public struct MinerInfo: Decodable {
     public let minerAddress: String
     public let gasPrice: Int64
@@ -486,13 +486,13 @@ public struct MinerInfo: Decodable {
     public let reputation: Double
 }
 
-/// An Ed25519 keypair for signing PoH transactions.
-public struct POHKeyPair {
+/// An Ed25519 keypair for signing DAI transactions.
+public struct DAIKeyPair {
     /// PKCS8 PEM private key. Keep secret — used to sign transactions.
     public let signingPrivateKey: String
-    /// SPKI PEM public key. Register with the node via ``POHClient/registerSigningKey(_:publicKeyPem:proof:)``.
+    /// SPKI PEM public key. Register with the node via ``DAIClient/registerSigningKey(_:publicKeyPem:proof:)``.
     public let signingPublicKey: String
-    /// Canonical `poh…` address derived from ``signingPublicKey``.
+    /// Canonical `dai…` address derived from ``signingPublicKey``.
     public let address: String
 
     public init(signingPrivateKey: String, signingPublicKey: String, address: String) {

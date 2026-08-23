@@ -1,5 +1,5 @@
 import Foundation
-@testable import proofofhuman
+@testable import POHKit
 
 // ── Mock HTTP session ──────────────────────────────────────────────────────────
 

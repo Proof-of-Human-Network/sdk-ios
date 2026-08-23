@@ -1,19 +1,19 @@
 import CryptoKit
 import Foundation
 
-/// chat-crypto — portable public-job chat encryption for the POH iOS SDK.
+/// chat-crypto — portable public-job chat encryption for the DAI iOS SDK.
 ///
 /// Public compute jobs are raced by miners the requester doesn't control, so the on-chain
 /// record of the prompt/reply is sealed to the requester's X25519 key:
 ///
 ///     X25519 (ECDH) -> HKDF-SHA256 -> AES-256-GCM
 ///
-/// Wire format is byte-identical to the node reference (poh-miner
+/// Wire format is byte-identical to the node reference (dai-miner
 /// `src/security/chat-crypto.js`) and the JS/Python/Rust/Android SDKs — see CHAT-CRYPTO.md.
 /// Uses CryptoKit (iOS 13+, macOS 10.15+).
-public enum POHChatCrypto {
-    private static let sealInfo = Data("poh-chat-seal-v1".utf8)
-    private static let scalarInfo = Data("poh-x25519-v1".utf8)
+public enum DAIChatCrypto {
+    private static let sealInfo = Data("dai-chat-seal-v1".utf8)
+    private static let scalarInfo = Data("dai-x25519-v1".utf8)
 
     /// A wallet's raw 32-byte X25519 encryption keypair (base64).
     public struct EncryptionKeypair {

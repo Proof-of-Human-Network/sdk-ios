@@ -1,10 +1,10 @@
 import CryptoKit
 import Foundation
 
-/// Ed25519 signing utilities for PoH transactions.
+/// Ed25519 signing utilities for DAI transactions.
 ///
 /// Uses CryptoKit (iOS 13+, macOS 10.15+).
-public enum POHSigning {
+public enum DAISigning {
 
     // ── Private DER prefixes for PKCS8 / SPKI ────────────────────────────────
 
@@ -25,7 +25,7 @@ public enum POHSigning {
             .filter { !$0.hasPrefix("-----") }
             .joined()
         guard let data = Data(base64Encoded: stripped) else {
-            throw POHError.decodingError(NSError(domain: "POHSigning", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid PEM base64"]))
+            throw DAIError.decodingError(NSError(domain: "DAISigning", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid PEM base64"]))
         }
         return data
     }
@@ -46,7 +46,7 @@ public enum POHSigning {
     private static func importPrivateKey(_ pem: String) throws -> Curve25519.Signing.PrivateKey {
         let der = try pemToBytes(pem)
         guard der.count >= 48 else {
-            throw POHError.decodingError(NSError(domain: "POHSigning", code: 2, userInfo: [NSLocalizedDescriptionKey: "PKCS8 DER too short"]))
+            throw DAIError.decodingError(NSError(domain: "DAISigning", code: 2, userInfo: [NSLocalizedDescriptionKey: "PKCS8 DER too short"]))
         }
         let rawBytes = der.subdata(in: 16..<48)
         return try Curve25519.Signing.PrivateKey(rawRepresentation: rawBytes)
@@ -64,18 +64,18 @@ public enum POHSigning {
 
     // ── Key generation ────────────────────────────────────────────────────────
 
-    /// Derive the canonical poh address bound to an ed25519 SPKI PEM public key.
+    /// Derive the canonical dai address bound to an ed25519 SPKI PEM public key.
     public static func deriveAddressFromSigningKey(_ signingPublicKey: String) -> String {
         let digest = SHA256.hash(data: Data(signingPublicKey.utf8))
         let hex    = digest.map { String(format: "%02x", $0) }.joined()
-        return "poh" + String(hex.prefix(40))
+        return "dai" + String(hex.prefix(40))
     }
 
-    /// Generate a fresh Ed25519 keypair compatible with the PoH node.
-    public static func generateKeyPair() -> POHKeyPair {
+    /// Generate a fresh Ed25519 keypair compatible with the DAI node.
+    public static func generateKeyPair() -> DAIKeyPair {
         let priv = Curve25519.Signing.PrivateKey()
         let pubPem = exportPublicKeyPem(priv.publicKey)
-        return POHKeyPair(
+        return DAIKeyPair(
             signingPrivateKey: exportPrivateKeyPem(priv),
             signingPublicKey:  pubPem,
             address:           deriveAddressFromSigningKey(pubPem)
@@ -92,7 +92,7 @@ public enum POHSigning {
         return sig.base64EncodedString()
     }
 
-    /// Build the proof needed by ``POHClient/registerSigningKey(_:publicKeyPem:proof:)``.
+    /// Build the proof needed by ``DAIClient/registerSigningKey(_:publicKeyPem:proof:)``.
     ///
     /// The proof is a base64 signature of the wallet address itself.
     public static func createSigningProof(walletAddress: String, privateKeyPem: String) throws -> String {
@@ -111,7 +111,7 @@ public enum POHSigning {
             "newSigningPublicKey": newSigningPublicKey,
         ], options: [.sortedKeys])
         guard let payloadStr = String(data: payload, encoding: .utf8) else {
-            throw POHError.decodingError(NSError(domain: "POHSigning", code: 3))
+            throw DAIError.decodingError(NSError(domain: "DAISigning", code: 3))
         }
         return try signData(payloadStr, privateKeyPem: existingPrivateKeyPem)
     }
@@ -198,44 +198,44 @@ public enum POHSigning {
         return "job-\(millis)-\(suffix)"
     }
 
-    /// Build an unsigned PoH transfer transaction.
+    /// Build an unsigned DAI transfer transaction.
     ///
     /// - Parameters:
-    ///   - from:      Sender address (`poh...`).
+    ///   - from:      Sender address (`dai...`).
     ///   - to:        Recipient address.
-    ///   - amountPOH: Amount in POH (e.g. 1.5 → 1_500_000_000 μPOH).
-    ///   - nonce:     Sender's current nonce + 1. Fetch via ``POHClient/getNonce(_:)``.
-    ///   - fee:       Miner fee in μPOH (default 0).
+    ///   - amountDAI: Amount in DAI (e.g. 1.5 → 1_500_000_000 μDAI).
+    ///   - nonce:     Sender's current nonce + 1. Fetch via ``DAIClient/getNonce(_:)``.
+    ///   - fee:       Miner fee in μDAI (default 0).
     ///   - memo:      Optional memo string.
     public static func buildTransfer(
         from: String,
         to: String,
-        amountPOH: Double,
+        amountDAI: Double,
         nonce: Int64,
         fee: Int64 = 0,
         memo: String = ""
-    ) -> PohTx {
-        let amount    = Int64(amountPOH * 1_000_000_000)
+    ) -> DAITx {
+        let amount    = Int64(amountDAI * 1_000_000_000)
         let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
         let txHash    = computeTxHash(from: from, to: to, amount: amount, fee: fee, nonce: nonce, timestamp: timestamp, memo: memo)
-        return PohTx(
+        return DAITx(
             from: from, to: to, amount: amount, fee: fee,
             nonce: nonce, timestamp: timestamp, memo: memo,
             txHash: txHash, signature: nil, signingPublicKey: nil
         )
     }
 
-    /// Sign a transaction built by ``buildTransfer(from:to:amountPOH:nonce:fee:memo:)``.
+    /// Sign a transaction built by ``buildTransfer(from:to:amountDAI:nonce:fee:memo:)``.
     ///
     /// ```swift
-    /// let kp     = POHSigning.generateKeyPair()
-    /// let tx     = POHSigning.buildTransfer(from: myAddr, to: recipient, amountPOH: 5.0, nonce: nonce + 1)
-    /// let signed = try POHSigning.signTransaction(tx, keyPair: kp)
-    /// let result = try await poh.submitTransaction(signed)
+    /// let kp     = DAISigning.generateKeyPair()
+    /// let tx     = DAISigning.buildTransfer(from: myAddr, to: recipient, amountDAI: 5.0, nonce: nonce + 1)
+    /// let signed = try DAISigning.signTransaction(tx, keyPair: kp)
+    /// let result = try await dai.submitTransaction(signed)
     /// ```
-    public static func signTransaction(_ tx: PohTx, keyPair: POHKeyPair) throws -> PohTx {
+    public static func signTransaction(_ tx: DAITx, keyPair: DAIKeyPair) throws -> DAITx {
         guard let txHash = tx.txHash else {
-            throw POHError.decodingError(NSError(domain: "POHSigning", code: 3, userInfo: [NSLocalizedDescriptionKey: "tx.txHash is nil — call buildTransfer() first"]))
+            throw DAIError.decodingError(NSError(domain: "DAISigning", code: 3, userInfo: [NSLocalizedDescriptionKey: "tx.txHash is nil — call buildTransfer() first"]))
         }
         let signature = try signData(txHash, privateKeyPem: keyPair.signingPrivateKey)
         var signed = tx
@@ -244,10 +244,10 @@ public enum POHSigning {
         return signed
     }
 
-    /// Sign with explicit PEM keys (alternative to passing a ``POHKeyPair``).
-    public static func signTransaction(_ tx: PohTx, privateKeyPem: String, publicKeyPem: String) throws -> PohTx {
+    /// Sign with explicit PEM keys (alternative to passing a ``DAIKeyPair``).
+    public static func signTransaction(_ tx: DAITx, privateKeyPem: String, publicKeyPem: String) throws -> DAITx {
         guard let txHash = tx.txHash else {
-            throw POHError.decodingError(NSError(domain: "POHSigning", code: 3, userInfo: [NSLocalizedDescriptionKey: "tx.txHash is nil — call buildTransfer() first"]))
+            throw DAIError.decodingError(NSError(domain: "DAISigning", code: 3, userInfo: [NSLocalizedDescriptionKey: "tx.txHash is nil — call buildTransfer() first"]))
         }
         let signature = try signData(txHash, privateKeyPem: privateKeyPem)
         var signed = tx

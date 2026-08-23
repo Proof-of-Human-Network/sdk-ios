@@ -1,7 +1,7 @@
 import Foundation
 
-/// Errors thrown by POHClient.
-public enum POHError: Error, LocalizedError {
+/// Errors thrown by DAIClient.
+public enum DAIError: Error, LocalizedError {
     case invalidBaseURL
     /// HTTP non-2xx. `body` is the parsed JSON dictionary when available
     /// (e.g. 412 HF_DATASET_DOWNLOAD_REQUIRED with datasetId).

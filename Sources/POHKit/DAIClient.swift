@@ -1,26 +1,25 @@
 import Foundation
 
-/// Default public bootstrap nodes for the PoH network.
-public let pohDefaultNodes: [URL] = [
-    URL(string: "https://miner.poh.ge")!,
-    URL(string: "https://proofofhuman.ge")!,
-    URL(string: "https://poh.assetux.com")!,
+/// Default public bootstrap nodes for the DAI network.
+public let daiDefaultNodes: [URL] = [
+    URL(string: "https://miner.iamai.kg")!,
+    URL(string: "https://iamai.kg")!,
 ]
 
-/// Client for the Proof of Human API.
+/// Client for the Decentralized Artificial Intelligence API.
 ///
 /// ```swift
 /// // Legacy single-node:
-/// let poh = POHClient(baseURL: URL(string: "https://proofofhuman.ge")!)
+/// let dai = DAIClient(baseURL: URL(string: "https://iamai.kg")!)
 ///
 /// // Network mode — auto-picks fastest live node:
-/// let poh = POHClient(nodes: pohDefaultNodes)
-/// try await poh.connect()   // probe nodes; optional but removes latency from first call
+/// let dai = DAIClient(nodes: daiDefaultNodes)
+/// try await dai.connect()   // probe nodes; optional but removes latency from first call
 ///
 /// // Single scan
-/// let result = try await poh.scan("0xabc...")
+/// let result = try await dai.scan("0xabc...")
 /// ```
-public final class POHClient {
+public final class DAIClient {
 
     private let candidateURLs: [URL]
     private let localBaseURL:  URL?
@@ -55,16 +54,16 @@ public final class POHClient {
     }
 
     /// Create a client that probes multiple network nodes and uses the fastest.
-    /// Falls back to ``pohDefaultNodes`` when *nodes* is empty.
+    /// Falls back to ``daiDefaultNodes`` when *nodes* is empty.
     public convenience init(
-        nodes:         [URL]         = pohDefaultNodes,
+        nodes:         [URL]         = daiDefaultNodes,
         localBaseURL:  URL?          = nil,
         apiKey:        String?       = nil,
         walletAddress: String?       = nil,
         timeout:       TimeInterval  = 30
     ) {
         self.init(
-            nodes:         nodes.isEmpty ? pohDefaultNodes : nodes,
+            nodes:         nodes.isEmpty ? daiDefaultNodes : nodes,
             localBaseURL:  localBaseURL,
             apiKey:        apiKey,
             walletAddress: walletAddress,
@@ -162,7 +161,7 @@ public final class POHClient {
         if let local = localBaseURL { return local }
         let remote = await resolvedBase()
         if isLoopback(remote) { return remote }
-        throw POHError.httpError(
+        throw DAIError.httpError(
             statusCode: 403,
             message: "This operation requires a local miner node. Pass localBaseURL: URL(string: \"http://127.0.0.1:3456\")!"
         )
@@ -186,7 +185,7 @@ public final class POHClient {
     /// Submit a bulk scan for multiple addresses.
     /// Returns a job reference; use ``pollJob(_:options:)`` or ``watchJob(_:options:)`` for results.
     public func scanBulk(_ inputs: [String], options: ScanOptions = .init()) async throws -> BulkScanResult {
-        guard !inputs.isEmpty else { throw POHError.emptyInputs }
+        guard !inputs.isEmpty else { throw DAIError.emptyInputs }
         let body = CheckerBody(
             input:         .multiple(inputs),
             walletAddress: walletAddress,
@@ -206,7 +205,7 @@ public final class POHClient {
     /// Poll a job until it reaches `done` or `error`, then return the final status.
     ///
     /// ```swift
-    /// let final = try await poh.pollJob(jobId, options: .init(
+    /// let final = try await dai.pollJob(jobId, options: .init(
     ///     interval:   2,
     ///     onProgress: { print("\($0.percent)%") }
     /// ))
@@ -220,7 +219,7 @@ public final class POHClient {
             if job.status == .done || job.status == .error { return job }
             let nextPoll = Date().addingTimeInterval(options.interval)
             if nextPoll > deadline {
-                throw POHError.jobTimedOut(jobId: jobId, lastStatus: job.status.rawValue)
+                throw DAIError.jobTimedOut(jobId: jobId, lastStatus: job.status.rawValue)
             }
             try await Task.sleep(nanoseconds: UInt64(options.interval * 1_000_000_000))
         }
@@ -232,7 +231,7 @@ public final class POHClient {
     /// The caller can `break` early; the stream closes cleanly.
     ///
     /// ```swift
-    /// for try await snap in poh.watchJob(jobId) {
+    /// for try await snap in dai.watchJob(jobId) {
     ///     print("\(snap.percent)% (\(snap.done)/\(snap.total))")
     /// }
     /// ```
@@ -253,7 +252,7 @@ public final class POHClient {
                         }
                         let nextPoll = Date().addingTimeInterval(options.interval)
                         if nextPoll > deadline {
-                            throw POHError.jobTimedOut(
+                            throw DAIError.jobTimedOut(
                                 jobId: jobId,
                                 lastStatus: job.status.rawValue
                             )
@@ -272,7 +271,7 @@ public final class POHClient {
     /// Convenience: submit a bulk scan and wait for all results in one call.
     ///
     /// ```swift
-    /// let done = try await poh.scanAndWait(["0xaaa...", "0xbbb..."])
+    /// let done = try await dai.scanAndWait(["0xaaa...", "0xbbb..."])
     /// print(done.results)
     /// ```
     public func scanAndWait(
@@ -294,11 +293,11 @@ public final class POHClient {
 
     /// Poll the brain verdict until ``BrainVerdict/status`` leaves `"pending"`.
     ///
-    /// Throws ``POHError/jobTimedOut(jobId:lastStatus:)`` if the verdict does not
+    /// Throws ``DAIError/jobTimedOut(jobId:lastStatus:)`` if the verdict does not
     /// resolve within `options.timeout` seconds.
     ///
     /// ```swift
-    /// let verdict = try await poh.pollBrainVerdict(brainKey: scan.brainKey!)
+    /// let verdict = try await dai.pollBrainVerdict(brainKey: scan.brainKey!)
     /// print(verdict.verdict, verdict.confidence)
     /// ```
     public func pollBrainVerdict(
@@ -312,7 +311,7 @@ public final class POHClient {
             if v.status != "pending" { return v }
             let nextPoll = Date().addingTimeInterval(options.interval)
             if nextPoll > deadline {
-                throw POHError.jobTimedOut(jobId: brainKey, lastStatus: v.status)
+                throw DAIError.jobTimedOut(jobId: brainKey, lastStatus: v.status)
             }
             try await Task.sleep(nanoseconds: UInt64(options.interval * 1_000_000_000))
         }
@@ -324,7 +323,7 @@ public final class POHClient {
     /// resolved verdict.
     ///
     /// ```swift
-    /// let sv = try await poh.scanAndVerdict("0xabc...")
+    /// let sv = try await dai.scanAndVerdict("0xabc...")
     /// print(sv.verdict.verdict, sv.verdict.confidence)
     /// ```
     public func scanAndVerdict(
@@ -360,7 +359,7 @@ public final class POHClient {
 
     // ── Natural language jobs ─────────────────────────────────────────────────
 
-    /// Submit a natural language question to the PoH network.
+    /// Submit a natural language question to the DAI network.
     /// Automatically routes the question to the best available skill.
     ///
     /// Returns immediately with an ``AskJobRef``; use ``pollJobResult(_:options:)``
@@ -370,7 +369,7 @@ public final class POHClient {
     /// `privateKeyPem` on ``AskOptions`` so the request can be signed. The node
     /// verifies the signature and debits the fee before it will run the job at all.
     ///
-    /// - Throws: ``POHError/httpError(statusCode:message:)`` with status 422 if no skill matches,
+    /// - Throws: ``DAIError/httpError(statusCode:message:)`` with status 422 if no skill matches,
     ///   or 402 if `budget > 0` but `walletAddress`/`privateKeyPem` are missing.
     public func submitJob(_ question: String, options: AskOptions = .init()) async throws -> AskJobRef {
         let maxBudget = Int64(options.budget * 1_000_000_000)
@@ -380,17 +379,17 @@ public final class POHClient {
         let route: ChatRouteResponse = try await requestAny("POST", path: "/chat/route", anyBody: routeBody)
         let freeTypes: Set<String> = ["cascade", "tasks", "dataset", "hf-model", "sequence"]
         if let t = route.type, freeTypes.contains(t) {
-            throw POHError.httpError(
+            throw DAIError.httpError(
                 statusCode: 422,
                 message: "Route type \"\(t)\" is free (task cascade / dataset / media). Use chat() instead of submitJob()."
             )
         }
         guard route.type == "skill", let skillId = route.skillId else {
-            throw POHError.httpError(statusCode: 422, message: "No skill available for: \"\(question)\"")
+            throw DAIError.httpError(statusCode: 422, message: "No skill available for: \"\(question)\"")
         }
 
         // 2. Submit the job
-        let jobId = POHSigning.generateJobId()
+        let jobId = DAISigning.generateJobId()
         var jobBody: [String: Any] = [
             "id": jobId,
             "type": "skill",
@@ -405,14 +404,14 @@ public final class POHClient {
         // runs it) without a valid signed payment proof.
         if maxBudget > 0 {
             guard let requester = options.walletAddress else {
-                throw POHError.httpError(statusCode: 402, message: "submitJob: walletAddress is required when budget > 0")
+                throw DAIError.httpError(statusCode: 402, message: "submitJob: walletAddress is required when budget > 0")
             }
             guard let privateKeyPem = options.privateKeyPem else {
-                throw POHError.httpError(statusCode: 402, message: "submitJob: privateKeyPem is required when budget > 0 — skill jobs always require a signed fee.")
+                throw DAIError.httpError(statusCode: 402, message: "submitJob: privateKeyPem is required when budget > 0 — skill jobs always require a signed fee.")
             }
             let minerInfo = try await getMinerInfo()
             let nonceInfo = try await getNonce(requester)
-            let proof = try POHSigning.signJobPayment(
+            let proof = try DAISigning.signJobPayment(
                 jobId: jobId, requesterAddress: requester, minerAddress: minerInfo.minerAddress,
                 amount: maxBudget, nonce: nonceInfo.nonce, privateKeyPem: privateKeyPem
             )
@@ -428,25 +427,25 @@ public final class POHClient {
     /// it carries a valid signed fee payment.
     ///
     /// ```swift
-    /// let ref = try await poh.runCompute("Summarize the top 5 rows", options: ComputeOptions(
+    /// let ref = try await dai.runCompute("Summarize the top 5 rows", options: ComputeOptions(
     ///     model: "llama3.1:8b", dataset: "some-org/some-dataset",
     ///     budget: 0.5, walletAddress: myAddress, privateKeyPem: myPrivateKey
     /// ))
-    /// let result = try await poh.pollJobResult(ref.jobId)
+    /// let result = try await dai.pollJobResult(ref.jobId)
     /// ```
     public func runCompute(_ prompt: String, options: ComputeOptions) async throws -> AskJobRef {
         guard options.budget > 0 else {
-            throw POHError.httpError(statusCode: 402, message: "runCompute: budget must be > 0 — compute jobs always require a fee")
+            throw DAIError.httpError(statusCode: 402, message: "runCompute: budget must be > 0 — compute jobs always require a fee")
         }
         if prompt.isEmpty && (options.attachments?.isEmpty ?? true) {
-            throw POHError.httpError(statusCode: 400, message: "runCompute: prompt or attachments required")
+            throw DAIError.httpError(statusCode: 400, message: "runCompute: prompt or attachments required")
         }
-        let jobId     = options.jobId ?? POHSigning.generateJobId()
+        let jobId     = options.jobId ?? DAISigning.generateJobId()
         let maxBudget = Int64(options.budget * 1_000_000_000)
 
         let minerInfo = try await getMinerInfo()
         let nonceInfo = try await getNonce(options.walletAddress)
-        let proof = try POHSigning.signJobPayment(
+        let proof = try DAISigning.signJobPayment(
             jobId: jobId, requesterAddress: options.walletAddress, minerAddress: minerInfo.minerAddress,
             amount: maxBudget, nonce: nonceInfo.nonce, privateKeyPem: options.privateKeyPem
         )
@@ -480,7 +479,7 @@ public final class POHClient {
     /// call ``downloadDataset(_:)`` then retry with `datasetId` set.
     public func chat(_ message: String, options: ChatOptions = .init()) async throws -> ChatResult {
         if message.isEmpty && (options.attachments?.isEmpty ?? true) {
-            throw POHError.httpError(statusCode: 400, message: "chat: message or attachments required")
+            throw DAIError.httpError(statusCode: 400, message: "chat: message or attachments required")
         }
         var body: [String: Any] = [
             "message": message.isEmpty ? "Please analyze the attached file(s)." : message,
@@ -506,7 +505,7 @@ public final class POHClient {
     /// Download + install a Hugging Face dataset on the miner (row-capped).
     public func downloadDataset(_ datasetId: String) async throws -> JSONValue {
         guard !datasetId.isEmpty else {
-            throw POHError.httpError(statusCode: 400, message: "downloadDataset: datasetId required")
+            throw DAIError.httpError(statusCode: 400, message: "downloadDataset: datasetId required")
         }
         return try await request("POST", path: "/api/hf-dataset/\(encoded(datasetId))/download")
     }
@@ -514,7 +513,7 @@ public final class POHClient {
     /// Remove an installed HF dataset from the miner.
     public func deleteDataset(_ datasetId: String) async throws {
         guard !datasetId.isEmpty else {
-            throw POHError.httpError(statusCode: 400, message: "deleteDataset: datasetId required")
+            throw DAIError.httpError(statusCode: 400, message: "deleteDataset: datasetId required")
         }
         let _: JSONValue = try await request("DELETE", path: "/api/hf-dataset/\(encoded(datasetId))")
     }
@@ -554,7 +553,7 @@ public final class POHClient {
     /// Poll a job until it reaches a terminal state (`done` or `error`).
     ///
     /// ```swift
-    /// let result = try await poh.pollJobResult(ref.jobId)
+    /// let result = try await dai.pollJobResult(ref.jobId)
     /// print(result.output)
     /// ```
     public func pollJobResult(
@@ -569,7 +568,7 @@ public final class POHClient {
             }
             let nextPoll = Date().addingTimeInterval(options.interval)
             if nextPoll > deadline {
-                throw POHError.jobTimedOut(jobId: jobId, lastStatus: status.status)
+                throw DAIError.jobTimedOut(jobId: jobId, lastStatus: status.status)
             }
             try await Task.sleep(nanoseconds: UInt64(options.interval * 1_000_000_000))
         }
@@ -578,9 +577,9 @@ public final class POHClient {
     /// Convenience: submit a question and wait for the answer in one call.
     ///
     /// ```swift
-    /// let result = try await poh.askAndWait(
+    /// let result = try await dai.askAndWait(
     ///     "What does vitalik.eth write about on Paragraph?",
-    ///     askOptions: .init(budget: 0.5, walletAddress: "poh...")
+    ///     askOptions: .init(budget: 0.5, walletAddress: "dai...")
     /// )
     /// ```
     public func askAndWait(
@@ -610,8 +609,8 @@ public final class POHClient {
 
     // ── Wallet / blockchain ──────────────────────────────────────────────────────
 
-    /// Fetch the POH balance for *address*.
-    /// The balance is in μPOH (1 POH = 1 000 000 000 μPOH).
+    /// Fetch the DAI balance for *address*.
+    /// The balance is in μDAI (1 DAI = 1 000 000 000 μDAI).
     public func getBalance(_ address: String) async throws -> WalletBalance {
         return try await request("GET", path: "/api/wallet/balance?address=\(encoded(address))")
     }
@@ -632,8 +631,8 @@ public final class POHClient {
         return try await request("GET", path: "/api/tx/pending")
     }
 
-    /// Submit a pre-signed ``PohTx`` to the network.
-    public func submitTransaction(_ tx: PohTx) async throws -> TxSubmitResult {
+    /// Submit a pre-signed ``DAITx`` to the network.
+    public func submitTransaction(_ tx: DAITx) async throws -> TxSubmitResult {
         return try await request("POST", path: "/api/tx/submit", body: tx)
     }
 
@@ -641,8 +640,8 @@ public final class POHClient {
     ///
     /// - Parameters:
     ///   - address:      The wallet address to register the key for.
-    ///   - publicKeyPem: SPKI PEM public key from ``POHSigning/generateKeyPair()``.
-    ///   - proof:        Signature of *address* — from ``POHSigning/createSigningProof(_:privateKeyPem:)``.
+    ///   - publicKeyPem: SPKI PEM public key from ``DAISigning/generateKeyPair()``.
+    ///   - proof:        Signature of *address* — from ``DAISigning/createSigningProof(_:privateKeyPem:)``.
     @discardableResult
     public func registerSigningKey(
         _ address: String,
@@ -656,10 +655,10 @@ public final class POHClient {
         return try await request("POST", path: "/api/wallet/register-key", body: body)
     }
 
-    /// Register a keypair from ``POHSigning/generateKeyPair()``.
+    /// Register a keypair from ``DAISigning/generateKeyPair()``.
     @discardableResult
-    public func registerKeyPair(_ keyPair: POHKeyPair, rotationProof: String? = nil) async throws -> [String: JSONValue] {
-        let proof = try POHSigning.createSigningProof(walletAddress: keyPair.address, privateKeyPem: keyPair.signingPrivateKey)
+    public func registerKeyPair(_ keyPair: DAIKeyPair, rotationProof: String? = nil) async throws -> [String: JSONValue] {
+        let proof = try DAISigning.createSigningProof(walletAddress: keyPair.address, privateKeyPem: keyPair.signingPrivateKey)
         return try await registerSigningKey(keyPair.address, publicKeyPem: keyPair.signingPublicKey, proof: proof, rotationProof: rotationProof)
     }
 
@@ -668,29 +667,29 @@ public final class POHClient {
         return try await request("GET", path: "/api/miner/info")
     }
 
-    /// Convenience: build, sign, and submit a POH transfer in one call.
+    /// Convenience: build, sign, and submit a DAI transfer in one call.
     ///
     /// ```swift
-    /// let kp     = POHSigning.generateKeyPair()
-    /// let result = try await poh.transfer(
+    /// let kp     = DAISigning.generateKeyPair()
+    /// let result = try await dai.transfer(
     ///     from:      myAddress,
     ///     to:        recipientAddress,
-    ///     amountPOH: 5.0,
+    ///     amountDAI: 5.0,
     ///     keyPair:   kp
     /// )
     /// ```
     public func transfer(
         from: String,
         to: String,
-        amountPOH: Double,
-        keyPair: POHKeyPair,
+        amountDAI: Double,
+        keyPair: DAIKeyPair,
         fee: Int64 = 0,
         memo: String = ""
     ) async throws -> TxSubmitResult {
         let nonceResp = try await getNonce(from)
         let nextNonce = (nonceResp.pendingNonce ?? nonceResp.nonce) + 1
-        let tx        = POHSigning.buildTransfer(from: from, to: to, amountPOH: amountPOH, nonce: nextNonce, fee: fee, memo: memo)
-        let signed    = try POHSigning.signTransaction(tx, keyPair: keyPair)
+        let tx        = DAISigning.buildTransfer(from: from, to: to, amountDAI: amountDAI, nonce: nextNonce, fee: fee, memo: memo)
+        let signed    = try DAISigning.signTransaction(tx, keyPair: keyPair)
         return try await submitTransaction(signed)
     }
 
@@ -703,7 +702,7 @@ public final class POHClient {
     ) async throws -> Data {
         let base = try await resolvedBase(method: method, path: path)
         guard let url = URL(string: base.absoluteString + path) else {
-            throw POHError.invalidBaseURL
+            throw DAIError.invalidBaseURL
         }
 
         var req = URLRequest(url: url, timeoutInterval: timeout)
@@ -721,11 +720,11 @@ public final class POHClient {
         do {
             (data, response) = try await session.data(for: req)
         } catch let err as URLError where err.code == .timedOut {
-            throw POHError.requestTimeout
+            throw DAIError.requestTimeout
         }
 
         guard let http = response as? HTTPURLResponse else {
-            throw POHError.httpError(statusCode: 0, message: "No HTTP response")
+            throw DAIError.httpError(statusCode: 0, message: "No HTTP response")
         }
 
         guard (200..<300).contains(http.statusCode) else {
@@ -733,7 +732,7 @@ public final class POHClient {
                 ?? String(data: data, encoding: .utf8)
                 ?? "HTTP \(http.statusCode)"
             let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            throw POHError.httpError(statusCode: http.statusCode, message: msg, body: body)
+            throw DAIError.httpError(statusCode: http.statusCode, message: msg, body: body)
         }
 
         return data
@@ -748,7 +747,7 @@ public final class POHClient {
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
-            throw POHError.decodingError(error)
+            throw DAIError.decodingError(error)
         }
     }
 
@@ -779,7 +778,7 @@ public final class POHClient {
         let data = try JSONSerialization.data(withJSONObject: anyBody)
         let base = try await resolvedBase(method: method, path: path)
         guard let url = URL(string: base.absoluteString + path) else {
-            throw POHError.invalidBaseURL
+            throw DAIError.invalidBaseURL
         }
         var req = URLRequest(url: url, timeoutInterval: timeout)
         req.httpMethod = method
@@ -791,10 +790,10 @@ public final class POHClient {
         do {
             (respData, response) = try await session.data(for: req)
         } catch let err as URLError where err.code == .timedOut {
-            throw POHError.requestTimeout
+            throw DAIError.requestTimeout
         }
         guard let http = response as? HTTPURLResponse else {
-            throw POHError.httpError(statusCode: 0, message: "No HTTP response")
+            throw DAIError.httpError(statusCode: 0, message: "No HTTP response")
         }
         // 202 = job not ready yet — still decode as T
         guard (200..<300).contains(http.statusCode) || http.statusCode == 202 else {
@@ -802,12 +801,12 @@ public final class POHClient {
                 ?? String(data: respData, encoding: .utf8)
                 ?? "HTTP \(http.statusCode)"
             let body = (try? JSONSerialization.jsonObject(with: respData)) as? [String: Any]
-            throw POHError.httpError(statusCode: http.statusCode, message: msg, body: body)
+            throw DAIError.httpError(statusCode: http.statusCode, message: msg, body: body)
         }
         do {
             return try decoder.decode(T.self, from: respData)
         } catch {
-            throw POHError.decodingError(error)
+            throw DAIError.decodingError(error)
         }
     }
 }

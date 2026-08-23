@@ -1,14 +1,14 @@
 import XCTest
-@testable import proofofhuman
+@testable import POHKit
 
-final class POHClientTests: XCTestCase {
+final class DAIClientTests: XCTestCase {
 
     private var mock: MockSession!
-    private var client: POHClient!
+    private var client: DAIClient!
 
     override func setUp() {
         mock   = MockSession()
-        client = POHClient(
+        client = DAIClient(
             baseURL: URL(string: "http://mock")!,
             session: mock
         )
@@ -75,7 +75,7 @@ final class POHClientTests: XCTestCase {
 
     func testScanBulkThrowsOnEmptyInputs() async {
         await XCTAssertThrowsErrorAsync(try await client.scanBulk([])) { error in
-            guard case POHError.emptyInputs = error else {
+            guard case DAIError.emptyInputs = error else {
                 return XCTFail("Expected .emptyInputs, got \(error)")
             }
         }
@@ -121,7 +121,7 @@ final class POHClientTests: XCTestCase {
         await XCTAssertThrowsErrorAsync(
             try await client.pollJob("j-1", options: .init(interval: 0.01, timeout: 0.02))
         ) { error in
-            guard case POHError.jobTimedOut = error else {
+            guard case DAIError.jobTimedOut = error else {
                 return XCTFail("Expected .jobTimedOut, got \(error)")
             }
         }
@@ -207,7 +207,7 @@ final class POHClientTests: XCTestCase {
         try mock.enqueueError(status: 404, message: "not found")
 
         await XCTAssertThrowsErrorAsync(try await client.scan("0xabc")) { error in
-            guard case POHError.httpError(let code, let msg) = error else {
+            guard case DAIError.httpError(let code, let msg) = error else {
                 return XCTFail("Expected .httpError, got \(error)")
             }
             XCTAssertEqual(code, 404)
@@ -216,7 +216,7 @@ final class POHClientTests: XCTestCase {
     }
 
     func testApiKeyIsIncludedInHeader() async throws {
-        let keyedClient = POHClient(
+        let keyedClient = DAIClient(
             baseURL: URL(string: "http://mock")!,
             apiKey: "test-key-abc",
             session: mock
@@ -264,11 +264,11 @@ final class POHClientTests: XCTestCase {
     // ── getMinerInfo ───────────────────────────────────────────────────────────
 
     func testGetMinerInfoDecodesMetadata() async throws {
-        mock.enqueueRaw(#"{"minerAddress":"poh-miner-1","gasPrice":1000,"model":"llama-3","queueLength":2,"reputation":4.5}"#)
+        mock.enqueueRaw(#"{"minerAddress":"dai-miner-1","gasPrice":1000,"model":"llama-3","queueLength":2,"reputation":4.5}"#)
 
         let info = try await client.getMinerInfo()
 
-        XCTAssertEqual(info.minerAddress, "poh-miner-1")
+        XCTAssertEqual(info.minerAddress, "dai-miner-1")
         XCTAssertEqual(info.model, "llama-3")
         XCTAssertEqual(info.queueLength, 2)
     }
@@ -276,31 +276,31 @@ final class POHClientTests: XCTestCase {
     // ── getBalance ─────────────────────────────────────────────────────────────
 
     func testGetBalanceDecodesAddressAndBalance() async throws {
-        mock.enqueueRaw(#"{"address":"poh123","balance":5000000000}"#)
+        mock.enqueueRaw(#"{"address":"dai123","balance":5000000000}"#)
 
-        let bal = try await client.getBalance("poh123")
+        let bal = try await client.getBalance("dai123")
 
-        XCTAssertEqual(bal.address, "poh123")
+        XCTAssertEqual(bal.address, "dai123")
         XCTAssertEqual(bal.balance, 5_000_000_000)
     }
 
     func testGetBalanceIncludesAddressInQueryString() async throws {
-        mock.enqueueRaw(#"{"address":"poh123","balance":0}"#)
+        mock.enqueueRaw(#"{"address":"dai123","balance":0}"#)
 
-        _ = try await client.getBalance("poh123")
+        _ = try await client.getBalance("dai123")
 
         let url = try XCTUnwrap(mock.requestsMade.first?.url?.absoluteString)
-        XCTAssertTrue(url.contains("poh123"))
+        XCTAssertTrue(url.contains("dai123"))
     }
 
     // ── getNonce ───────────────────────────────────────────────────────────────
 
     func testGetNonceDecodesCurrentNonce() async throws {
-        mock.enqueueRaw(#"{"address":"poh123","nonce":7}"#)
+        mock.enqueueRaw(#"{"address":"dai123","nonce":7}"#)
 
-        let n = try await client.getNonce("poh123")
+        let n = try await client.getNonce("dai123")
 
-        XCTAssertEqual(n.address, "poh123")
+        XCTAssertEqual(n.address, "dai123")
         XCTAssertEqual(n.nonce, 7)
     }
 
@@ -308,14 +308,14 @@ final class POHClientTests: XCTestCase {
 
     func testGetTransactionHistoryDecodesEntries() async throws {
         mock.enqueueRaw("""
-            {"address":"poh123","entries":[
+            {"address":"dai123","entries":[
                 {"height":100,"delta":1000000000,"txHash":"abc","ts":1700000000,"label":"transfer"}
             ]}
         """)
 
-        let hist = try await client.getTransactionHistory("poh123")
+        let hist = try await client.getTransactionHistory("dai123")
 
-        XCTAssertEqual(hist.address, "poh123")
+        XCTAssertEqual(hist.address, "dai123")
         XCTAssertEqual(hist.entries.count, 1)
         XCTAssertEqual(hist.entries[0].delta, 1_000_000_000)
         XCTAssertEqual(hist.entries[0].label, "transfer")
@@ -337,8 +337,8 @@ final class POHClientTests: XCTestCase {
     func testSubmitTransactionPostsAndReturnsHash() async throws {
         mock.enqueueRaw(#"{"ok":true,"txHash":"cafebabe","queueSize":1}"#)
 
-        let tx = PohTx(
-            from: "pohA", to: "pohB", amount: 1_000_000_000, fee: 0,
+        let tx = DAITx(
+            from: "daiA", to: "daiB", amount: 1_000_000_000, fee: 0,
             nonce: 1, timestamp: 1_700_000_000_000, memo: "",
             txHash: "cafebabe", signature: "sig", signingPublicKey: "pub"
         )
@@ -351,8 +351,8 @@ final class POHClientTests: XCTestCase {
     func testSubmitTransactionUsesPostMethod() async throws {
         mock.enqueueRaw(#"{"ok":true,"txHash":"abc","queueSize":0}"#)
 
-        let tx = PohTx(
-            from: "pohA", to: "pohB", amount: 1_000_000_000, fee: 0,
+        let tx = DAITx(
+            from: "daiA", to: "daiB", amount: 1_000_000_000, fee: 0,
             nonce: 1, timestamp: 1_700_000_000_000, memo: "",
             txHash: "abc", signature: "sig", signingPublicKey: "pub"
         )
@@ -366,13 +366,13 @@ final class POHClientTests: XCTestCase {
     func testRegisterSigningKeyPostsKeyAndProof() async throws {
         mock.enqueueRaw(#"{"success":true}"#)
 
-        _ = try await client.registerSigningKey("pohA", publicKeyPem: "pubkey-pem", proof: "proof-b64")
+        _ = try await client.registerSigningKey("daiA", publicKeyPem: "pubkey-pem", proof: "proof-b64")
 
         let req = try XCTUnwrap(mock.requestsMade.first)
         XCTAssertEqual(req.httpMethod, "POST")
         let body = try XCTUnwrap(req.httpBody)
         let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
-        XCTAssertEqual(json?["address"] as? String, "pohA")
+        XCTAssertEqual(json?["address"] as? String, "daiA")
         XCTAssertEqual(json?["signingPublicKey"] as? String, "pubkey-pem")
         XCTAssertEqual(json?["proof"] as? String, "proof-b64")
     }
@@ -393,7 +393,7 @@ final class POHClientTests: XCTestCase {
         mock.enqueueRaw(#"{"type":"chat","reason":"No skill matched"}"#, status: 422)
 
         await XCTAssertThrowsErrorAsync(try await client.submitJob("random question")) { error in
-            guard case POHError.httpError(let code, _) = error else {
+            guard case DAIError.httpError(let code, _) = error else {
                 return XCTFail("Expected .httpError, got \(error)")
             }
             XCTAssertEqual(code, 422)
@@ -404,9 +404,9 @@ final class POHClientTests: XCTestCase {
         mock.enqueueRaw(#"{"type":"skill","skillId":"sk-sum","input":{}}"#)
 
         await XCTAssertThrowsErrorAsync(
-            try await client.submitJob("Summarise this", options: .init(budget: 0.5, walletAddress: "pohAlice"))
+            try await client.submitJob("Summarise this", options: .init(budget: 0.5, walletAddress: "daiAlice"))
         ) { error in
-            guard case POHError.httpError(let code, _) = error else {
+            guard case DAIError.httpError(let code, _) = error else {
                 return XCTFail("Expected .httpError, got \(error)")
             }
             XCTAssertEqual(code, 402)
@@ -414,14 +414,14 @@ final class POHClientTests: XCTestCase {
     }
 
     func testSubmitJobSignsNonceBoundPaymentProofWhenBudgetPositive() async throws {
-        let kp = POHSigning.generateKeyPair()
+        let kp = DAISigning.generateKeyPair()
         mock.enqueueRaw(#"{"type":"skill","skillId":"sk-sum","input":{}}"#)
-        mock.enqueueRaw(#"{"minerAddress":"pohMiner","gasPrice":1,"model":"qwen2.5:1.5b","queueLength":0,"reputation":1.0}"#)
-        mock.enqueueRaw(#"{"address":"pohAlice","nonce":3}"#)
+        mock.enqueueRaw(#"{"minerAddress":"daiMiner","gasPrice":1,"model":"qwen2.5:1.5b","queueLength":0,"reputation":1.0}"#)
+        mock.enqueueRaw(#"{"address":"daiAlice","nonce":3}"#)
         mock.enqueueRaw(#"{"jobId":"jnl-1","status":"queued","statusUrl":null,"resultUrl":null,"message":null}"#)
 
         let ref = try await client.submitJob("Summarise this", options: .init(
-            budget: 0.5, walletAddress: "pohAlice", privateKeyPem: kp.signingPrivateKey
+            budget: 0.5, walletAddress: "daiAlice", privateKeyPem: kp.signingPrivateKey
         ))
 
         XCTAssertEqual(ref.jobId, "jnl-1")
@@ -429,7 +429,7 @@ final class POHClientTests: XCTestCase {
         let body = try XCTUnwrap(req.httpBody)
         let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
         XCTAssertEqual(json?["maxBudget"] as? Int64, 500_000_000)
-        XCTAssertEqual(json?["requesterAddress"] as? String, "pohAlice")
+        XCTAssertEqual(json?["requesterAddress"] as? String, "daiAlice")
         let paymentTx = try XCTUnwrap(json?["paymentTx"] as? [String: Any])
         XCTAssertNotNil(paymentTx["txHash"])
         XCTAssertNotNil(paymentTx["signature"])
@@ -438,13 +438,13 @@ final class POHClientTests: XCTestCase {
     // ── runCompute ─────────────────────────────────────────────────────────────
 
     func testRunComputeThrowsWhenBudgetNotPositive() async throws {
-        let kp = POHSigning.generateKeyPair()
+        let kp = DAISigning.generateKeyPair()
         await XCTAssertThrowsErrorAsync(
             try await client.runCompute("hi", options: .init(
-                model: "qwen2.5:1.5b", budget: 0, walletAddress: "pohAlice", privateKeyPem: kp.signingPrivateKey
+                model: "qwen2.5:1.5b", budget: 0, walletAddress: "daiAlice", privateKeyPem: kp.signingPrivateKey
             ))
         ) { error in
-            guard case POHError.httpError(let code, _) = error else {
+            guard case DAIError.httpError(let code, _) = error else {
                 return XCTFail("Expected .httpError, got \(error)")
             }
             XCTAssertEqual(code, 402)
@@ -452,14 +452,14 @@ final class POHClientTests: XCTestCase {
     }
 
     func testRunComputeSignsPaymentAndPostsModelDataset() async throws {
-        let kp = POHSigning.generateKeyPair()
-        mock.enqueueRaw(#"{"minerAddress":"pohMiner","gasPrice":1,"model":"qwen2.5:1.5b","queueLength":0,"reputation":1.0}"#)
-        mock.enqueueRaw(#"{"address":"pohAlice","nonce":7}"#)
+        let kp = DAISigning.generateKeyPair()
+        mock.enqueueRaw(#"{"minerAddress":"daiMiner","gasPrice":1,"model":"qwen2.5:1.5b","queueLength":0,"reputation":1.0}"#)
+        mock.enqueueRaw(#"{"address":"daiAlice","nonce":7}"#)
         mock.enqueueRaw(#"{"jobId":"jc-1","status":"queued","statusUrl":null,"resultUrl":null,"message":null}"#)
 
         let ref = try await client.runCompute("Summarize the top rows", options: .init(
             model: "llama3.1:8b", dataset: "some-org/some-dataset",
-            budget: 0.5, walletAddress: "pohAlice", privateKeyPem: kp.signingPrivateKey
+            budget: 0.5, walletAddress: "daiAlice", privateKeyPem: kp.signingPrivateKey
         ))
 
         XCTAssertEqual(ref.jobId, "jc-1")
