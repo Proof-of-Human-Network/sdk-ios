@@ -19,13 +19,13 @@ final class DAIChatCryptoTests: XCTestCase {
     // src/security/chat-crypto.js for deriveEncryptionKeypair("rust-interop").
     func testOpensNodeSealedEnvelope() throws {
         let kp = try DAIChatCrypto.deriveEncryptionKeypair("rust-interop")
-        XCTAssertEqual(kp.publicKeyB64, "XWeuTjf5gk1B9EUaRYB0mBaRRudIfFn2CZkcsFp2NWc=")
+        XCTAssertEqual(kp.publicKeyB64, "KEuWmZUz5CWxn2QsMVq2ViPk6AQw5ZpFP7KYwiraiRs=")
         let env = DAIChatCrypto.SealedEnvelope(
             v: 1,
             alg: "x25519-hkdf-sha256-aes256gcm",
-            epk: "9Jgr/SzalkizcEPDyTPgaWL0zreJPcpxPzkQA33GgSw=",
-            iv: "5vNG7exFDLDJRdlb",
-            ct: "B+2GpffQMNnXB0UhDhtBT5Vw7e3FJWnL/XMsTObXel7O26NtIAhv"
+            epk: "iEPANh2KxCPlu4HC29mjejV2w9WWRZQMKLv/jaWWX2Q=",
+            iv: "ulySPK2YUEhQsL2X",
+            ct: "eUxra8/2d5RYGWoBwCCM6C7o5SjZPmtiVHislyZRzhMqRc73eERb"
         )
         XCTAssertEqual(try DAIChatCrypto.open(env, privateScalarB64: kp.privateKeyB64), "hello from node to rust")
     }

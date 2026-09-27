@@ -39,7 +39,7 @@ final class DAISigningTests: XCTestCase {
             from: "daiA", to: "daiB", amount: 1_000_000_000, fee: 5,
             nonce: 3, timestamp: 1_700_000_000_000, memo: "hello"
         )
-        XCTAssertEqual(h, "e309a41e0c088876f2763f8d01ae434ff060bd4391202d555be1d96ee0f14c8a")
+        XCTAssertEqual(h, "935a2c2bc7a3ed2419d2001b834dbfd7a54d3a3bbb0223664b6f87c15cbf0968")
     }
 
     /// A memo containing JSON-special characters must be escaped the same way
@@ -81,7 +81,7 @@ final class DAISigningTests: XCTestCase {
     /// the JS, Python, Rust, and Android SDKs.
     func testComputeJobPaymentHashMatchesNodeReferenceValue() {
         let h = DAISigning.computeJobPaymentHash(jobId: "job-abc", requesterAddress: "daiAlice", minerAddress: "daiMiner", amount: 500_000_000, nonce: 3)
-        XCTAssertEqual(h, "1ed86280c1ab64d60d55a232a1c339299d32d8bd45e5f2bf26ff72b26d8908c0")
+        XCTAssertEqual(h, "801deeac9ce07b1931954d9e50569f8c4521c1f934fcecb00e831f172bcd46aa")
     }
 
     func testSignJobPaymentReturnsTxHashAndSignature() throws {

@@ -72,6 +72,25 @@ public final class DAIClient {
         )
     }
 
+    /// Single-node client over an injected session — used by the unit tests (internal, not API).
+    convenience init(
+        baseURL:       URL,
+        localBaseURL:  URL?         = nil,
+        apiKey:        String?      = nil,
+        walletAddress: String?      = nil,
+        timeout:       TimeInterval = 30,
+        session:       HTTPSession
+    ) {
+        self.init(
+            nodes:         [baseURL],
+            localBaseURL:  localBaseURL,
+            apiKey:        apiKey,
+            walletAddress: walletAddress,
+            timeout:       timeout,
+            session:       session
+        )
+    }
+
     init(
         nodes:         [URL],
         localBaseURL:  URL?         = nil,
@@ -146,7 +165,8 @@ public final class DAIClient {
         let m = method.uppercased()
         if m == "GET" || m == "HEAD" || m == "OPTIONS" { return false }
         let p = path.split(separator: "?").first.map(String.init) ?? path
-        return !(m == "POST" && p == "/gossip")
+        // /gossip and /api/estimate (read-only) may go to any node
+        return !(m == "POST" && (p == "/gossip" || p == "/api/estimate"))
     }
 
     private func isLoopback(_ url: URL) -> Bool {
@@ -497,6 +517,44 @@ public final class DAIClient {
         return try await requestAny("POST", path: "/chat/ask", anyBody: body)
     }
 
+    // ── Fee estimation ─────────────────────────────────────────────────────────
+
+    /// Estimate what a job or chat request will cost — the `eth_estimateGas` of DAI.
+    ///
+    /// Send the same fields you would submit (prompt, attachments, a skill, MCP tools, a
+    /// dataset). The node sizes the whole pipeline — attachment text, skill and MCP output,
+    /// dataset rows, planner and synthesis calls — and returns the AI tokens it will use, the
+    /// minimum fee it accepts, and a recommended budget. Read-only: nothing runs or is paid.
+    ///
+    /// Sizes that only exist after running (what a skill fetches) come back as ``TokenRange``s
+    /// bounded by the executor's own caps, each tagged `measured` / `bounded` / `assumed`
+    /// in ``EstimateResult/breakdown``.
+    ///
+    /// Needs a node newer than 0.4.36 (it adds `POST /api/estimate`); older nodes answer 404.
+    ///
+    /// ```swift
+    /// let est = try await dai.estimate(
+    ///     "Summarise this report",
+    ///     options: .init(attachments: [ChatAttachment(name: "report.md", content: text)])
+    /// )
+    /// est.fees.minimum.raw       // μDAI the node accepts, at minimum
+    /// est.fees.recommended.raw   // μDAI to escrow (covers the worst case)
+    /// // runCompute takes DAI; estimate returns μDAI:
+    /// let budgetDai = Double(est.fees.recommended.raw ?? 0) / 1e9
+    /// ```
+    public func estimate(_ prompt: String? = nil, options: EstimateOptions = .init()) async throws -> EstimateResult {
+        let hasBody = !(prompt?.isEmpty ?? true)
+            || !(options.messages?.isEmpty ?? true)
+            || !(options.attachments?.isEmpty ?? true)
+        let bareSkillJob = options.type == "skill" && options.skillId != nil
+        if !hasBody && !bareSkillJob {
+            throw DAIError.httpError(statusCode: 400, message: "estimate: prompt, messages or attachments required")
+        }
+        var body = options.toBody(prompt: prompt)
+        if body["requesterAddress"] == nil, let addr = walletAddress { body["requesterAddress"] = addr }
+        return try await requestAny("POST", path: "/api/estimate", anyBody: body)
+    }
+
     /// List Hugging Face datasets installed on the miner.
     public func listDatasets() async throws -> HfDatasetListResult {
         return try await request("GET", path: "/api/hf-dataset")
@@ -539,6 +597,7 @@ public final class DAIClient {
                 if case .string(let s) = raw.profile?.computeOutput { return s }
                 return nil
             }()
+        let cipher = raw.profile?.replyCipher
         return AskJobResult(
             jobId:      raw.jobId,
             status:     raw.status ?? (raw.error != nil ? "error" : "done"),
@@ -546,6 +605,8 @@ public final class DAIClient {
             nlResponse: nl,
             skillId:    raw.profile?.skillId,
             tokensUsed: raw.profile?.tokensUsed,
+            encrypted:  cipher != nil && output == nil,
+            replyCipher: cipher,
             error:      raw.error
         )
     }
@@ -839,6 +900,8 @@ private struct JobResultEnvelope: Decodable {
         let nlResponse: String?
         let skillId: String?
         let tokensUsed: Int?
+        let replyCipher: JSONValue?
+        let encrypted: Bool?
     }
     let profile: Profile?
     let error: String?

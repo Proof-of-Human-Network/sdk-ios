@@ -217,6 +217,180 @@ public struct ChatAttachment {
     }
 }
 
+// ── Fee estimation ────────────────────────────────────────────────────────────
+
+/// Inclusive token bounds. `min == max` when the size is measured exactly.
+public struct TokenRange: Decodable, Equatable {
+    public let min: Int64
+    public let max: Int64
+}
+
+/// What to estimate — the same fields a job or chat request carries. Pass the prompt to
+/// ``DAIClient/estimate(_:options:)``; everything else is optional.
+public struct EstimateOptions {
+    /// `"compute"` (default, a paid job), `"chat"` (OpenAI-style `messages`) or `"skill"`.
+    public var type: String?
+    /// OpenAI-style messages for `type: "chat"` (use this OR a prompt).
+    public var messages: [[String: String]]?
+    public var history: [[String: String]]?
+    /// Text is inlined and measured; images are not billed by the node.
+    public var attachments: [ChatAttachment]?
+    public var skillId: String?
+    /// MCP tool names (`server__tool`) to run in a cascade.
+    public var mcp: [String]?
+    /// An installed Hugging Face dataset id — the rows the job would inject are measured.
+    public var dataset: String?
+    /// Fee currency ticker; `nil` for DAI. Non-DAI fees are quoted off the live P2P book.
+    public var currency: String?
+    /// Output tokens to reserve (1...4096, default 512). Jobs cap output at 512 regardless.
+    public var maxOutputTokens: Int?
+    /// `false` skips skill/cascade routing, as on a job.
+    public var route: Bool
+    public var model: String?
+    /// Defaults to the client's `walletAddress`.
+    public var requesterAddress: String?
+    /// The `/job` payload address, if any (it sets the job fee floor).
+    public var address: String?
+
+    public init(
+        type: String? = nil, messages: [[String: String]]? = nil, history: [[String: String]]? = nil,
+        attachments: [ChatAttachment]? = nil, skillId: String? = nil, mcp: [String]? = nil,
+        dataset: String? = nil, currency: String? = nil, maxOutputTokens: Int? = nil,
+        route: Bool = true, model: String? = nil, requesterAddress: String? = nil, address: String? = nil
+    ) {
+        self.type = type
+        self.messages = messages
+        self.history = history
+        self.attachments = attachments
+        self.skillId = skillId
+        self.mcp = mcp
+        self.dataset = dataset
+        self.currency = currency
+        self.maxOutputTokens = maxOutputTokens
+        self.route = route
+        self.model = model
+        self.requesterAddress = requesterAddress
+        self.address = address
+    }
+
+    func toBody(prompt: String?) -> [String: Any] {
+        var b: [String: Any] = [:]
+        if let prompt, !prompt.isEmpty { b["prompt"] = prompt }
+        if let type { b["type"] = type }
+        if let messages, !messages.isEmpty { b["messages"] = messages }
+        if let history, !history.isEmpty { b["history"] = history }
+        if let attachments, !attachments.isEmpty { b["attachments"] = attachments.map { $0.asDictionary() } }
+        if let skillId { b["skillId"] = skillId }
+        if let mcp, !mcp.isEmpty { b["mcp"] = mcp }
+        if let dataset { b["dataset"] = dataset }
+        if let currency { b["currency"] = currency }
+        if let maxOutputTokens { b["maxOutputTokens"] = maxOutputTokens }
+        if !route { b["route"] = false }
+        if let model { b["model"] = model }
+        if let requesterAddress { b["requesterAddress"] = requesterAddress }
+        if let address { b["address"] = address }
+        return b
+    }
+}
+
+/// One contributor to the prompt, tagged by how well its size is known.
+public struct EstimateBreakdownItem: Decodable {
+    public let id: String
+    public let kind: String
+    public let ref: String?
+    public let tokens: TokenRange
+    /// `"measured"` (counted exactly), `"bounded"` (capped by the executing code) or `"assumed"`.
+    public let basis: String
+    public let note: String?
+}
+
+/// One model call the pipeline makes.
+public struct EstimateCall: Decodable {
+    public let purpose: String
+    public let promptTokens: TokenRange
+    public let outputTokens: TokenRange
+    public let basis: String?
+    public let note: String?
+}
+
+/// A fee in one currency. `raw` is `nil` when `unavailable` (nothing quotes that pair).
+public struct FeeQuote: Decodable {
+    public let tokens: Int64
+    /// Raw units of `currency` (μDAI for DAI).
+    public let raw: Int64?
+    public let currency: String
+    /// The endpoint whose floor this is (set on `minimum`).
+    public let gate: String?
+    public let gasPrice: Double?
+    public let source: String?
+    public let via: String?
+    public let display: Double?
+    public let unavailable: Bool?
+    public let message: String?
+}
+
+public struct EstimateDaiFees: Decodable {
+    public let minimum: FeeQuote
+    public let recommended: FeeQuote
+}
+
+public struct EstimateFees: Decodable {
+    public let currency: String
+    /// The lowest fee the node accepts — bids below it are rejected.
+    public let minimum: FeeQuote
+    /// Covers the pipeline's worst case (never below `minimum`). Escrow this.
+    public let recommended: FeeQuote
+    /// DAI figures, present when `currency` is not DAI.
+    public let dai: EstimateDaiFees?
+}
+
+public struct EstimateTask: Decodable {
+    public let id: String
+    public let kind: String
+    public let skillId: String?
+    public let tool: String?
+}
+
+public struct EstimateRoute: Decodable {
+    /// `"direct"`, `"routed-skill"`, `"cascade"` or `"skill-job"`.
+    public let mode: String
+    /// True when the plan comes from the deterministic router; the live model-planner may differ.
+    public let predicted: Bool
+    public let reason: String?
+    public let skillId: String?
+    public let tasks: [EstimateTask]?
+}
+
+public struct EstimateTokens: Decodable {
+    public let prompt: TokenRange
+    public let output: TokenRange
+    public let skillCompute: TokenRange
+    public let total: TokenRange
+}
+
+public struct OutputCap: Decodable {
+    public let budgetCapApplies: Bool
+    public let tokens: Int64?
+    public let note: String?
+}
+
+/// Reply from ``DAIClient/estimate(_:options:)`` (`POST /api/estimate`).
+public struct EstimateResult: Decodable {
+    public let type: String
+    /// `"job"` (POST /job) or `"chat"` (/v1, /openai/v1) — decides which minimum applies.
+    public let target: String
+    public let model: String
+    public let currency: String
+    public let gasPrice: Double
+    public let route: EstimateRoute
+    public let tokens: EstimateTokens
+    public let calls: [EstimateCall]
+    public let breakdown: [EstimateBreakdownItem]
+    public let fees: EstimateFees
+    public let outputCap: OutputCap
+    public let warnings: [String]
+}
+
 /// Options for free-form chat (`POST /chat/ask`).
 public struct ChatOptions {
     public var history: [[String: String]]?
@@ -351,6 +525,10 @@ public struct AskJobResult: Decodable {
     public let skillId:    String?
     /// Tokens billed for the job.
     public let tokensUsed: Int?
+    /// True when the reply is sealed in `replyCipher` and `output` is nil.
+    public let encrypted:  Bool?
+    /// `profile.replyCipher`. Open with the requester X25519 key.
+    public let replyCipher: JSONValue?
     public let error:      String?
 }
 

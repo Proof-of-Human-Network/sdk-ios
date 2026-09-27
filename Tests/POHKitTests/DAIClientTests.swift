@@ -548,6 +548,124 @@ final class DAIClientTests: XCTestCase {
         XCTAssertEqual(m.id, "m2")
         XCTAssertEqual(m.type, "solana")
     }
+
+    // ── estimate ──────────────────────────────────────────────────────────────
+
+    private let estimateJSON = #"""
+    {
+      "ok": true, "type": "compute", "target": "job", "model": "qwen3-1.7b", "currency": "DAI", "gasPrice": 1,
+      "route": {"mode": "routed-skill", "predicted": true, "reason": "skill:web_search", "skillId": "web_search"},
+      "tokens": {
+        "prompt": {"min": 542, "max": 2042}, "output": {"min": 1, "max": 512},
+        "skillCompute": {"min": 10, "max": 1050}, "total": {"min": 553, "max": 3604}
+      },
+      "calls": [{"purpose": "skill-answer", "promptTokens": {"min": 542, "max": 2042}, "outputTokens": {"min": 1, "max": 512}}],
+      "breakdown": [{"id": "skill:web_search", "kind": "skill", "ref": "web_search", "tokens": {"min": 0, "max": 1500}, "basis": "bounded"}],
+      "fees": {
+        "currency": "DAI",
+        "minimum": {"tokens": 990, "raw": 990, "currency": "DAI", "gate": "/job"},
+        "recommended": {"tokens": 3604, "raw": 3604, "currency": "DAI"}
+      },
+      "outputCap": {"budgetCapApplies": false, "note": "routed pipelines are not capped by the budget"},
+      "warnings": ["routing is predicted"]
+    }
+    """#
+
+    func testEstimatePostsJobFieldsAndDecodesResult() async throws {
+        mock.enqueueRaw(estimateJSON)
+
+        // No localBaseURL: estimate is read-only and allowed on any node.
+        let est = try await client.estimate(
+            "search the web: ai news",
+            options: .init(
+                attachments: [ChatAttachment(name: "n.md", content: "hi")],
+                skillId: "web_search", maxOutputTokens: 200
+            )
+        )
+
+        let req = try XCTUnwrap(mock.requestsMade.first)
+        XCTAssertEqual(req.httpMethod, "POST")
+        XCTAssertEqual(req.url?.path, "/api/estimate")
+        let body = try XCTUnwrap(req.httpBody)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["prompt"] as? String, "search the web: ai news")
+        XCTAssertEqual(json["skillId"] as? String, "web_search")
+        XCTAssertEqual(json["maxOutputTokens"] as? Int, 200)
+        XCTAssertNil(json["route"])                      // default routing is not sent
+        let att = try XCTUnwrap(json["attachments"] as? [[String: Any]])
+        XCTAssertEqual(att.first?["name"] as? String, "n.md")
+
+        XCTAssertEqual(est.route.mode, "routed-skill")
+        XCTAssertTrue(est.route.predicted)
+        XCTAssertEqual(est.tokens.total.max, 3604)
+        XCTAssertEqual(est.tokens.skillCompute.min, 10)
+        XCTAssertEqual(est.fees.minimum.raw, 990)
+        XCTAssertEqual(est.fees.minimum.gate, "/job")
+        XCTAssertEqual(est.fees.recommended.raw, 3604)
+        XCTAssertEqual(est.breakdown.first?.basis, "bounded")
+        XCTAssertEqual(est.calls.first?.promptTokens.max, 2042)
+        XCTAssertFalse(est.outputCap.budgetCapApplies)
+        XCTAssertEqual(est.warnings, ["routing is predicted"])
+    }
+
+    func testEstimateDefaultsRequesterAddressToClientWalletAndSendsRouteFalse() async throws {
+        let c = DAIClient(baseURL: URL(string: "http://mock")!, walletAddress: "daiWallet", session: mock)
+        mock.enqueueRaw(estimateJSON)
+
+        _ = try await c.estimate("x", options: .init(route: false))
+
+        let body = try XCTUnwrap(mock.requestsMade.first?.httpBody)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["requesterAddress"] as? String, "daiWallet")
+        XCTAssertEqual(json["route"] as? Bool, false)
+    }
+
+    func testEstimateRequiresInputButAllowsABareSkillJob() async throws {
+        await XCTAssertThrowsErrorAsync(try await client.estimate()) { error in
+            guard case DAIError.httpError(let code, _, _) = error else {
+                return XCTFail("Expected .httpError, got \(error)")
+            }
+            XCTAssertEqual(code, 400)
+        }
+        mock.enqueueRaw(estimateJSON)
+        let est = try await client.estimate(options: .init(type: "skill", skillId: "web_search"))
+        XCTAssertEqual(est.type, "compute")
+    }
+
+    func testEstimateReportsUnavailableCurrencyWithDaiFallback() async throws {
+        mock.enqueueRaw(#"""
+        {"ok": true, "type": "compute", "target": "job", "model": "m", "currency": "aiETB", "gasPrice": 1,
+         "route": {"mode": "direct", "predicted": false},
+         "tokens": {"prompt": {"min": 1, "max": 1}, "output": {"min": 1, "max": 1},
+                    "skillCompute": {"min": 0, "max": 0}, "total": {"min": 2, "max": 2}},
+         "calls": [], "breakdown": [],
+         "fees": {"currency": "aiETB",
+           "minimum": {"tokens": 990, "currency": "aiETB", "unavailable": true, "message": "no market"},
+           "recommended": {"tokens": 3604, "currency": "aiETB", "unavailable": true, "message": "no market"},
+           "dai": {"minimum": {"tokens": 990, "raw": 990, "currency": "DAI"},
+                   "recommended": {"tokens": 3604, "raw": 3604, "currency": "DAI"}}},
+         "outputCap": {"budgetCapApplies": true, "tokens": 512}, "warnings": []}
+        """#)
+
+        let est = try await client.estimate("x", options: .init(currency: "aiETB"))
+
+        XCTAssertEqual(est.fees.recommended.unavailable, true)
+        XCTAssertNil(est.fees.recommended.raw)
+        XCTAssertEqual(est.fees.recommended.message, "no market")
+        XCTAssertEqual(est.fees.dai?.recommended.raw, 3604)
+    }
+
+    func testEstimateSurfacesNodeErrors() async {
+        mock.enqueueRaw(#"{"error":"Dataset not installed","code":"dataset_not_installed"}"#, status: 422)
+
+        await XCTAssertThrowsErrorAsync(try await client.estimate("x", options: .init(dataset: "ds/missing"))) { error in
+            guard case DAIError.httpError(let code, let message, _) = error else {
+                return XCTFail("Expected .httpError, got \(error)")
+            }
+            XCTAssertEqual(code, 422)
+            XCTAssertTrue(message.contains("Dataset not installed"))
+        }
+    }
 }
 
 // ── XCTest async helper ────────────────────────────────────────────────────────
